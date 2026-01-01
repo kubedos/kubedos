@@ -300,51 +300,54 @@ darksite_build_apt_repo() {
 }
 
 preseed_emit_apt_snippet() {
-  # This snippet is inserted into preseed.cfg.
-  # Uses REPO_MODE:
-  #   darksite  = ONLY ISO-local repo
-  #   connected = ONLY network mirrors
-  #   both      = ISO-local repo + mirrors fallback
-  if [[ "${REPO_MODE}" == "darksite" ]]; then
-    cat <<'EOF'
+  # Emits a valid Debian Installer preseed APT block.
+  # REPO_MODE:
+  #   connected : use normal Debian mirrors
+  #   darksite  : use only the ISO-baked repo at /cdrom/darksite/apt
+  #   both      : prefer ISO repo but allow mirrors
+  case "${REPO_MODE}" in
+    darksite)
+      cat <<'EOF'
 # --- DARKSITE APT (local only) ---
 d-i apt-setup/use_mirror boolean false
-d-i apt-setup/cdrom/set-first boolean false
-d-i apt-setup/cdrom/set-next boolean false
-d-i apt-setup/cdrom/set-failed boolean false
 d-i apt-cdrom-setup/another boolean false
 
-# Add a local file:// repo baked into the ISO at /cdrom/darksite/apt
-d-i apt-setup/local0/repository string deb [trusted=yes] file:/cdrom/darksite/apt ./
-d-i apt-setup/local0/comment string Darksite (baked into ISO)
-d-i apt-setup/local0/source boolean false
-EOF
-  elif [[ "${REPO_MODE}" == "both" ]]; then
-    cat <<EOF
-# --- DARKSITE APT + CONNECTED FALLBACK ---
-d-i apt-setup/use_mirror boolean true
-
-# Add a local file:// repo baked into the ISO at /cdrom/darksite/apt
-d-i apt-setup/local0/repository string deb [trusted=yes] file:/cdrom/darksite/apt ./
-d-i apt-setup/local0/comment string Darksite (baked into ISO)
+# Use a local APT repo baked into the ISO at /cdrom/darksite/apt
+d-i apt-setup/local0/repository string deb [trusted=yes] file:/cdrom/darksite/apt trixie main contrib non-free non-free-firmware
+d-i apt-setup/local0/comment string Darksite ISO repo
 d-i apt-setup/local0/source boolean false
 
-# Network mirror fallback:
-d-i mirror/country string ${PRESEED_MIRROR_COUNTRY}
-d-i mirror/http/hostname string ${PRESEED_MIRROR_HOST}
-d-i mirror/http/directory string ${PRESEED_MIRROR_DIR}
-d-i mirror/http/proxy string ${PRESEED_HTTP_PROXY}
+# Don't try security/updates mirrors when darksite-only
+d-i apt-setup/security-updates boolean false
 EOF
-  else
-    cat <<EOF
-# --- CONNECTED APT (mirrors only) ---
+      ;;
+    both)
+      cat <<'EOF'
+# --- BOTH APT (local + mirror) ---
+# Prefer local repo, but also allow internet mirrors if available
 d-i apt-setup/use_mirror boolean true
-d-i mirror/country string ${PRESEED_MIRROR_COUNTRY}
-d-i mirror/http/hostname string ${PRESEED_MIRROR_HOST}
-d-i mirror/http/directory string ${PRESEED_MIRROR_DIR}
-d-i mirror/http/proxy string ${PRESEED_HTTP_PROXY}
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+d-i apt-cdrom-setup/another boolean false
+d-i apt-setup/local0/repository string deb [trusted=yes] file:/cdrom/darksite/apt trixie main contrib non-free non-free-firmware
+d-i apt-setup/local0/comment string Darksite ISO repo
+d-i apt-setup/local0/source boolean false
 EOF
-  fi
+      ;;
+    *)
+      cat <<'EOF'
+# --- CONNECTED APT (mirror) ---
+d-i apt-setup/use_mirror boolean true
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+EOF
+      ;;
+  esac
 }
 
 # =============================================================================
@@ -421,7 +424,7 @@ PRESEED_MIRROR_DIR="${PRESEED_MIRROR_DIR:-/debian}"                           # 
 PRESEED_HTTP_PROXY="${PRESEED_HTTP_PROXY:-}"                                  # PRESEED_HTTP_PROXY: HTTP proxy for installer. Empty = no proxy. Example: http://10.0.0.10:3128
 PRESEED_ROOT_PASSWORD="${PRESEED_ROOT_PASSWORD:-root}"                        # PRESEED_ROOT_PASSWORD: root password used by preseed. Strongly recommended to override via env/secret.
 PRESEED_BOOTDEV="${PRESEED_BOOTDEV:-/dev/sda}"                                # PRESEED_BOOTDEV: install target disk inside the VM. Examples: /dev/sda, /dev/vda, /dev/nvme0n1
-PRESEED_EXTRA_PKGS="${PRESEED_EXTRA_PKGS:-openssh-server}"                    # PRESEED_EXTRA_PKGS: space-separated list of extra packagesExample: "openssh-server curl vim"
+PRESEED_EXTRA_PKGS="${PRESEED_EXTRA_PKGS:-openssh-server} rsync"                    # PRESEED_EXTRA_PKGS: space-separated list of extra packagesExample: "openssh-server curl vim"
 
 # =============================================================================
 # High-level deployment mode / targets
@@ -1038,10 +1041,27 @@ mk_iso() {
   local build="$BUILD_ROOT/$name"
   local mnt="$build/mnt"
   local cust="$build/custom"
-  local dark="$cust/darksite"
 
   rm -rf "$build" 2>/dev/null || true
-  mkdir -p "$mnt" "$cust" "$dark"
+  mkdir -p "$mnt" "$cust"
+
+  # =============================================================================
+  # Copy original ISO contents into custom tree FIRST
+  # (This prevents later operations from being overwritten by the ISO copy step.)
+  # =============================================================================
+  (
+    set -euo pipefail
+    trap 'umount -f "$mnt" 2>/dev/null || true' EXIT
+    mount -o loop,ro "$ISO_ORIG" "$mnt"
+    cp -a "$mnt/"* "$cust/"
+    cp -a "$mnt/.disk" "$cust/" 2>/dev/null || true
+  )
+
+  # =============================================================================
+  # Ensure ISO darksite/ exists, then bake payload into it
+  # =============================================================================
+  local dark="$cust/darksite"
+  mkdir -p "$dark"
 
   log "mk_iso: effective DARKSITE_SRC=${DARKSITE_SRC:-<unset>}"
 
@@ -1050,12 +1070,17 @@ mk_iso() {
   #   - optional static payload (DARKSITE_SRC)
   #   - optional on-demand APT repo snapshot (DARKSITE_BUILD_ON_DEMAND)
   # ---------------------------------------------------------------------------
-
-  if [[ -d "$DARKSITE_SRC" ]]; then
+  if [[ -d "${DARKSITE_SRC:-}" ]]; then
     log "Baking DARKSITE_SRC=$DARKSITE_SRC into ISO darksite/"
     rsync -a --delete "$DARKSITE_SRC"/ "$dark"/
+
+    # If not master, remove ansible material from ISO payload
+    if [[ "${name}" != "master" && "${name}" != "master.unixbox.net" ]]; then
+      rm -rf "$dark/ansible" 2>/dev/null || true
+      rm -f  "$dark/ansible_ed25519" 2>/dev/null || true
+    fi
   else
-    warn "DARKSITE_SRC not found: $DARKSITE_SRC (skipping extra darksite payload)"
+    warn "DARKSITE_SRC not found: ${DARKSITE_SRC:-<unset>} (skipping extra darksite payload)"
   fi
 
   # Build and bake the ISO-local APT repo snapshot (true time capsule)
@@ -1069,27 +1094,13 @@ mk_iso() {
   fi
 
   # =============================================================================
-  # Copy original ISO contents into custom tree
-  # =============================================================================
-
-  (
-    set -euo pipefail
-    trap 'umount -f "$mnt" 2>/dev/null || true' EXIT
-    mount -o loop,ro "$ISO_ORIG" "$mnt"
-    cp -a "$mnt/"* "$cust/"
-    cp -a "$mnt/.disk" "$cust/" 2>/dev/null || true
-  )
-
-  # =============================================================================
   # Bake postinstall payload into ISO darksite/
   # =============================================================================
-
   install -m0755 "$postinstall_src" "$dark/postinstall.sh"
 
   # =============================================================================
   # systemd one-shot bootstrap to run postinstall.sh once
   # =============================================================================
-
   cat >"$dark/bootstrap.service" <<'EOF'
 [Unit]
 Description=Initial Bootstrap Script (One-time)
@@ -1112,9 +1123,32 @@ WantedBy=multi-user.target
 EOF
 
   # =============================================================================
+  # systemd one-shot apply unit (MUST NOT be embedded via heredoc in preseed)
+  # Ship this file in ISO payload and copy it in-target in late_command.
+  # =============================================================================
+  mkdir -p "$dark/systemd"
+  cat >"$dark/systemd/darksite-apply.service" <<'EOF'
+[Unit]
+Description=KubeOS apply (one-shot)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/kubeos/applied.stamp
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /srv/darksite/apply.py
+ExecStartPost=/usr/bin/mkdir -p /var/lib/kubeos
+ExecStartPost=/usr/bin/touch /var/lib/kubeos/applied.stamp
+ExecStartPost=/bin/sh -c 'salt-call --local mine.update 2>/dev/null || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # =============================================================================
   # Provision env file (consumed by postinstall/apply)
   # =============================================================================
-
   {
     echo "DOMAIN=${DOMAIN}"
     echo "ADMIN_USER=${ADMIN_USER}"
@@ -1135,7 +1169,6 @@ EOF
   # =============================================================================
   # Admin authorized key seed (optional)
   # =============================================================================
-
   local auth_seed="$dark/authorized_keys.${ADMIN_USER}"
   if [[ -n "${SSH_PUBKEY:-}" ]]; then
     printf '%s\n' "$SSH_PUBKEY" >"$auth_seed"
@@ -1149,7 +1182,6 @@ EOF
   # =============================================================================
   # Bake enrollment keypair (optional)
   # =============================================================================
-
   if [[ -n "${ENROLL_KEY_PRIV:-}" && -n "${ENROLL_KEY_PUB:-}" && -f "$ENROLL_KEY_PRIV" && -f "$ENROLL_KEY_PUB" ]]; then
     install -m0600 "$ENROLL_KEY_PRIV" "$dark/enroll_ed25519"
     install -m0644 "$ENROLL_KEY_PUB"  "$dark/enroll_ed25519.pub"
@@ -1157,11 +1189,9 @@ EOF
 
   # =============================================================================
   # Preseed networking block (DHCP vs static)
-  # IMPORTANT: hostname should match the VM role name (etcd-1, cp-1, w-2, storage, etc)
   # =============================================================================
-
   local NETBLOCK
-  if [[ -z "$static_ip" ]]; then
+  if [[ -z "${static_ip:-}" ]]; then
     NETBLOCK="d-i netcfg/choose_interface select auto
 d-i netcfg/disable_dhcp boolean false
 d-i netcfg/get_hostname string ${name}
@@ -1182,14 +1212,12 @@ d-i netcfg/get_nameservers string ${NAMESERVER}"
   # =============================================================================
   # APT snippet (DARKSITE vs CONNECTED vs BOTH)
   # =============================================================================
-
   local APT_SNIPPET
   APT_SNIPPET="$(preseed_emit_apt_snippet)"
 
   # =============================================================================
-  # Write preseed.cfg WITHOUT expanding $FQDN/$SHORT in the build shell.
+  # Write preseed.cfg (NO heredocs inside late_command)
   # =============================================================================
-
   cat >"$cust/preseed.cfg" <<'EOF'
 # =============================================================================
 # Force full automation (prevents installer prompts from stopping the run)
@@ -1241,7 +1269,11 @@ popularity-contest popularity-contest/participate boolean false
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/bootdev string __PRESEED_BOOTDEV__
 
+# =============================================================================
+# Late command: seed darksite + bootstrap + apply (ONE LINE SAFE)
+# =============================================================================
 d-i preseed/late_command string \
+  set -e; \
   FQDN="__FQDN__"; SHORT="__SHORT__"; \
   echo "$FQDN" > /target/etc/hostname; \
   in-target hostnamectl set-hostname "$FQDN" || true; \
@@ -1250,15 +1282,24 @@ d-i preseed/late_command string \
   else \
     printf '\n127.0.1.1\t%s\t%s\n' "$FQDN" "$SHORT" >> /target/etc/hosts; \
   fi; \
-  mkdir -p /target/root/darksite ; \
-  cp -a /cdrom/darksite/. /target/root/darksite/ ; \
-  in-target chmod +x /root/darksite/postinstall.sh ; \
-  in-target cp /root/darksite/bootstrap.service /etc/systemd/system/bootstrap.service ; \
-  in-target mkdir -p /etc/environment.d ; \
-  in-target cp /root/darksite/99-provision.conf /etc/environment.d/99-provision.conf ; \
-  in-target chmod 0644 /etc/environment.d/99-provision.conf ; \
-  in-target systemctl daemon-reload ; \
-  in-target systemctl enable bootstrap.service ; \
+  mkdir -p /target/root/darksite; \
+  cp -a /cdrom/darksite/. /target/root/darksite/; \
+  in-target chmod +x /root/darksite/postinstall.sh /root/darksite/apply.py /root/darksite/wg-refresh-planes.py 2>/dev/null || true; \
+  in-target mkdir -p /srv/ansible /srv/darksite /etc/systemd/system /etc/environment.d /var/lib/kubeos; \
+  if in-target test -f /etc/hostname && in-target grep -qi "^master" /etc/hostname; then in-target cp -a /root/darksite/ansible/. /srv/ansible/ 2>/dev/null || true; fi; \
+  in-target install -m 0755 /root/darksite/apply.py /srv/darksite/apply.py 2>/dev/null || true; \
+  in-target install -m 0755 /root/darksite/wg-refresh-planes.py /srv/darksite/wg-refresh-planes.py 2>/dev/null || true; \
+  in-target cp -a /root/darksite/systemd/. /etc/systemd/system/ 2>/dev/null || true; \
+  in-target install -m 0644 /root/darksite/bootstrap.service /etc/systemd/system/bootstrap.service; \
+  in-target install -m 0644 /root/darksite/99-provision.conf /etc/environment.d/99-provision.conf; \
+  in-target chmod 0644 /etc/environment.d/99-provision.conf; \
+  in-target systemctl daemon-reload; \
+  in-target systemctl disable --now darksite-wg-reflector.timer 2>/dev/null || true; \
+  in-target systemctl disable --now darksite-wg-reflector.service 2>/dev/null || true; \
+  in-target systemctl mask darksite-wg-reflector.timer 2>/dev/null || true; \
+  in-target systemctl mask darksite-wg-reflector.service 2>/dev/null || true; \
+  in-target systemctl enable darksite-apply.service 2>/dev/null || true; \
+  in-target systemctl enable bootstrap.service 2>/dev/null || true; \
   in-target /bin/systemctl --no-block poweroff || true
 
 d-i cdrom-detect/eject boolean true
@@ -1270,7 +1311,6 @@ EOF
   # =============================================================================
   # Replace placeholders safely (NETBLOCK/APT_SNIPPET are multiline; use perl)
   # =============================================================================
-
   local fqdn="${name}.${DOMAIN}"
 
   sed -i \
@@ -1289,9 +1329,33 @@ EOF
   perl -0777 -i -pe 's/__APT_SNIPPET__/$ENV{APT_SNIPPET}/g' "$cust/preseed.cfg"
 
   # =============================================================================
+  # Preseed sanitation + validation (fail fast)
+  # =============================================================================
+  sed -i 's/\r$//' "$cust/preseed.cfg" || true
+  perl -i -pe 's/^\x{FEFF}//' "$cust/preseed.cfg" 2>/dev/null || true
+
+  # Fail hard if the preseed accidentally contains systemd unit headers
+  if grep -qE '^\[(Unit|Service|Install)\]' "$cust/preseed.cfg"; then
+    echo '[FATAL] preseed.cfg contains raw systemd unit stanza lines; this will break d-i.' >&2
+    nl -ba "$cust/preseed.cfg" | sed -n '1,220p' >&2
+    die 'Invalid preseed.cfg (contains unit headers)'
+  fi
+
+  if ! command -v debconf-set-selections >/dev/null 2>&1; then
+    apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y debconf-utils >/dev/null 2>&1 || true
+  fi
+  if command -v debconf-set-selections >/dev/null 2>&1; then
+    if ! debconf-set-selections --checkonly <"$cust/preseed.cfg"; then
+      echo '[FATAL] preseed.cfg failed debconf validation. Showing first 220 lines:' >&2
+      nl -ba "$cust/preseed.cfg" | sed -n '1,220p' >&2
+      die 'Invalid preseed.cfg generated (debconf check failed)'
+    fi
+  fi
+
+  # =============================================================================
   # Bootloader patching (BIOS + UEFI)
   # =============================================================================
-
   local KARGS="auto=true priority=critical vga=788 preseed/file=/cdrom/preseed.cfg ---"
 
   if [[ -f "$cust/isolinux/txt.cfg" ]]; then
@@ -1324,6 +1388,7 @@ EOF
       sed -i '1i set timeout=1' "$cfg" || true
     fi
 
+    # Append kernel args to linux lines
     sed -i "s#^\([[:space:]]*linux[[:space:]]\+\S\+\)#\1 $KARGS#g" "$cfg" || true
   done
 
@@ -1337,7 +1402,6 @@ EOF
   # =============================================================================
   # Final ISO repack (BIOS+UEFI hybrid if possible)
   # =============================================================================
-
   if [[ -f "$cust/isolinux/isolinux.bin" && -f "$cust/isolinux/boot.cat" && -f /usr/share/syslinux/isohdpfx.bin ]]; then
     log "Repacking ISO (BIOS+UEFI hybrid) -> $iso_out"
 
@@ -1375,6 +1439,16 @@ EOF
       -e "$efi_img" \
       -no-emul-boot -isohybrid-gpt-basdat \
       "$cust"
+  fi
+
+  # =============================================================================
+  # Quick sanity check: ensure /darksite/ and /preseed.cfg exist in the ISO tree.
+  # =============================================================================
+  if [[ ! -f "$cust/preseed.cfg" ]]; then
+    die "preseed.cfg missing from ISO tree: $cust/preseed.cfg"
+  fi
+  if [[ ! -d "$cust/darksite" ]]; then
+    die "darksite/ missing from ISO tree: $cust/darksite"
   fi
 }
 
@@ -1490,6 +1564,11 @@ ensure_users(){
   install -m0644 /home/ansible/.ssh/id_ed25519.pub /home/ansible/.ssh/authorized_keys
   chown ansible:ansible /home/ansible/.ssh/authorized_keys
   chmod 600 /home/ansible/.ssh/authorized_keys
+  cat >/etc/sudoers.d/90-ansible <<'EOF'
+ansible ALL=(ALL) NOPASSWD:ALL
+EOF
+  chmod 0440 /etc/sudoers.d/90-ansible
+  visudo -c >/dev/null
 
   # Allow the cluster enrollment key to log in as ADMIN_USER
   local ENROLL_PUB_SRC="/root/darksite/enroll_ed25519.pub"
@@ -2519,19 +2598,19 @@ PS1='\u@\h:\w\$ '
 fb_banner() {
   cat << 'FBBANNER'
 
-      ..                           ..                  ..
-< .z@8"`                     . uW8"                  dF
- !@88E           x.    .     `t888                  '88bu.
- '888E   u     .@88k  z88u    8888   .        .u    '*88888bu
-  888E u@8NL  ~"8888 ^8888    9888.z88N    ud8888.    ^"*8888N
-  888E`"88*"    8888  888R    9888  888E :888'8888.  beWE "888L
-  888E .dN.     8888  888R    9888  888E d888 '88%"  888E  888E
-  888E~8888     8888  888R    9888  888E 8888.+"     888E  888E
-  888E '888&    8888 ,888B .  9888  888E 8888L       888E  888F
-  888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
-'"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
-   ""    ""                      "`         "YP'        "" os
-		secure · "borg-like" · platfourms -> everywhere
+        ..                           ..                  ..
+  < .z@8"`                     . uW8"                  dF
+   !@88E           x.    .     `t888                  '88bu.
+   '888E   u     .@88k  z88u    8888   .        .u    '*88888bu
+    888E u@8NL  ~"8888 ^8888    9888.z88N    ud8888.    ^"*8888N
+    888E`"88*"    8888  888R    9888  888E :888'8888.  beWE "888L
+    888E .dN.     8888  888R    9888  888E d888 '88%"  888E  888E
+    888E~8888     8888  888R    9888  888E 8888.+"     888E  888E
+    888E '888&    8888 ,888B .  9888  888E 8888L       888E  888F
+    888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
+  '"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
+     ""    ""                      "`         "YP'        "" os
+      secure · "borg-like" · platfourms -> everywhere
 
 FBBANNER
 }
@@ -3146,25 +3225,45 @@ post_darksite_to_srv_and_apply() {
 
   local src_root="/root/darksite"
   local src_ansible="${src_root}/ansible"
-  local dst_ansible="/srv/ansible"
+  local dst_root="/srv"
+  local dst_ansible="${dst_root}/ansible"
+  local dst_darksite="${dst_root}/darksite"
 
-  log "Postinstall: staging Ansible + running apply.py"
+  log "Postinstall: staging Ansible + darksite helpers into /srv"
 
-  # Ensure darksite exists
   [[ -d "$src_root" ]] || die "Missing $src_root (preseed copy likely failed)"
 
   # Ensure /srv exists
-  install -d -m 0755 /srv
+  install -d -m 0755 "$dst_root"
+  install -d -m 0755 "$dst_ansible"
+  install -d -m 0755 "$dst_darksite"
 
-  # Copy ansible payload into /srv/ansible (no rsync)
-  if [[ -d "$src_ansible" ]]; then
-    log "Copying $src_ansible -> $dst_ansible"
-    rm -rf "$dst_ansible"
+  # Prefer rsync if present (preserves perms, deletes stale files)
+  if command -v rsync >/dev/null 2>&1; then
+    if [[ -d "$src_ansible" ]]; then
+      log "Staging ansible payload via rsync: $src_ansible -> $dst_ansible"
+      rsync -aHAX --delete "${src_ansible}/" "${dst_ansible}/"
+    else
+      warn "No $src_ansible found; skipping ansible stage"
+    fi
   else
-    warn "No $src_ansible found; skipping ansible copy"
+    # Fallback to cp (no rsync in minimal installs)
+    if [[ -d "$src_ansible" ]]; then
+      log "Staging ansible payload via cp: $src_ansible -> $dst_ansible"
+      rm -rf "$dst_ansible"
+      install -d -m 0755 "$dst_ansible"
+      cp -a "${src_ansible}/." "${dst_ansible}/"
+    else
+      warn "No $src_ansible found; skipping ansible stage"
+    fi
   fi
 
-  log "Postinstall: darksite -> /srv complete"
+  # Stage darksite helper scripts into /srv/darksite
+  log "Staging darksite helper scripts -> $dst_darksite"
+  install -m 0555 "$src_root/apply.py" "$dst_darksite/apply.py" 2>/dev/null || true
+  install -m 0555 "$src_root/wg-refresh-planes.py" "$dst_darksite/wg-refresh-planes.py" 2>/dev/null || true
+
+  log "Postinstall: /srv staging complete"
 }
 
 # =============================================================================
@@ -3281,7 +3380,7 @@ EOF
   apt-get install -y --no-install-recommends \
     sudo openssh-server curl wget ca-certificates gnupg jq xxd unzip tar \
     iproute2 iputils-ping ethtool tcpdump net-tools \
-    nftables wireguard-tools \
+    nftables wireguard-tools rsync \
     chrony rsyslog qemu-guest-agent vim \
     prometheus-node-exporter || true
 
@@ -3796,25 +3895,25 @@ shopt -s cdspell
 PS1='\u@\h:\w\$ '
 
 # =============================================================================
-# Banner and prompt customization
+# Banner
 # =============================================================================
 
 fb_banner() {
   cat << 'FBBANNER'
 
-      ..                           ..                  ..
-< .z@8"`                     . uW8"                  dF
- !@88E           x.    .     `t888                  '88bu.
- '888E   u     .@88k  z88u    8888   .        .u    '*88888bu
-  888E u@8NL  ~"8888 ^8888    9888.z88N    ud8888.    ^"*8888N
-  888E`"88*"    8888  888R    9888  888E :888'8888.  beWE "888L
-  888E .dN.     8888  888R    9888  888E d888 '88%"  888E  888E
-  888E~8888     8888  888R    9888  888E 8888.+"     888E  888E
-  888E '888&    8888 ,888B .  9888  888E 8888L       888E  888F
-  888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
-'"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
-   ""    ""                      "`         "YP'        "" os
-		secure · "borg-like" · platfourms -> everywhere
+        ..                           ..                  ..
+  < .z@8"`                     . uW8"                  dF
+   !@88E           x.    .     `t888                  '88bu.
+   '888E   u     .@88k  z88u    8888   .        .u    '*88888bu
+    888E u@8NL  ~"8888 ^8888    9888.z88N    ud8888.    ^"*8888N
+    888E`"88*"    8888  888R    9888  888E :888'8888.  beWE "888L
+    888E .dN.     8888  888R    9888  888E d888 '88%"  888E  888E
+    888E~8888     8888  888R    9888  888E 8888.+"     888E  888E
+    888E '888&    8888 ,888B .  9888  888E 8888L       888E  888F
+    888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
+  '"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
+     ""    ""                      "`         "YP'        "" os
+      secure · "borg-like" · platfourms -> everywhere
 
 FBBANNER
 }
@@ -4395,11 +4494,7 @@ proxmox_all() {
 }
 
 # =============================================================================
-<<<<<<< HEAD
-# Run apply.py on master (authoritative: /srv/darksite/apply.py)                                                                                                                                  
-=======
 # Run apply.py on master (authoritative: /srv/darksite/apply.py)
->>>>>>> 4491018 (update: 2026-01-01 11:48:33)
 # - never touches ~/.ssh/known_hosts
 # - all checks + execution happen under sudo (root-owned payload is fine)
 # - streams apply output live (python -u)
