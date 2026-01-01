@@ -249,7 +249,216 @@ The only requirement is:
 
 ## Quickstart (the friendly way)
 
-### 1) Clone this repo
+## 2) Configure your target access (Proxmox example)
+
+KubeDOS talks to your target using plain SSH.  
+For the Proxmox example, you want **passwordless SSH** working first.
+
+### Generate an SSH key (if you don’t already have one)
+
 ```bash
-git clone https://github.com/foundrybot-ca/foundrybot
-cd foundrybot
+ssh-keygen -t ed25519 -C "kubedos"
+```
+
+Just press Enter through the prompts (or set a passphrase if you prefer).
+
+### Copy your key to the Proxmox host
+
+Replace `PROXMOX_HOST` with your Proxmox IP or hostname:
+
+```bash
+ssh-copy-id root@PROXMOX_HOST
+```
+
+✅ After this, you should be able to do:
+
+```bash
+ssh root@PROXMOX_HOST
+```
+
+…and it should **log in without asking for a password**.
+
+---
+
+### Recommended: add an SSH config entry (makes life easier)
+
+Create or edit:
+
+```bash
+~/.ssh/config
+```
+
+Add an entry like this:
+
+```sshconfig
+Host proxmox
+  HostName PROXMOX_HOST
+  User root
+  IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
+```
+
+Now instead of typing a long hostname every time, you can just do:
+
+```bash
+ssh proxmox
+```
+
+…and your deploy scripts can use the shortcut name `proxmox` as the target.
+
+---
+
+## 3) Run the example deploy
+
+This demo deploys **16 total machines**:
+
+- ✅ **1 master**
+- ✅ **15 minions**
+- ✅ everything prewired for converge (IaC baked into every node)
+
+To deploy the whole environment, you run the deploy script:
+
+```bash
+./deploy.sh
+```
+
+That’s it.
+
+KubeDOS handles:
+- creating the VMs
+- booting the artifacts
+- wiring the fabrics
+- converging the environment
+
+---
+
+## About networking in the example
+
+The default demo uses a **/20 network plan**:
+
+✅ **4096 total IPs**
+
+This /20 is split into two halves:
+
+- **8× /24 networks = Blue**
+- **8× /24 networks = Green**
+
+That makes it easy to support:
+
+- ✅ blue/green deployments
+- ✅ canary nodes
+- ✅ rapid rebuilds
+- ✅ full environment cloning
+
+You *can* change the addressing plan — but the default is designed to **just work** for a large lab fleet without needing custom math.
+
+---
+
+## Works with your existing tools (Packer, Terraform, etc.)
+
+KubeDOS does **not** fight your existing world.
+
+You can absolutely:
+
+- build artifacts using KubeDOS  
+- deploy them using **Packer**
+- place them with **Terraform**
+- orchestrate them with whatever workflow you already use
+
+The key difference is:
+
+✅ the OS artifacts are consistent  
+✅ the converge payload is built into every image  
+
+So no matter how you launch nodes, they boot ready — and converge reliably.
+
+---
+
+## Why this is a big deal (the advantages)
+
+### ✅ Faster disaster recovery
+
+A cluster dying is no longer terrifying.
+
+If AWS goes down:
+
+- boot the same artifacts in Azure
+- converge
+- reattach workloads/state
+
+Your infrastructure becomes portable and replaceable.
+
+---
+
+### ✅ Fewer moving parts
+
+No stack of provisioning middleware.
+
+Just:
+
+- a build server
+- a target
+- one script
+
+---
+
+### ✅ Better security posture
+
+- WireGuard by default  
+- No third-party control planes  
+- No random overlay defaults  
+- Everything is deterministic and auditable  
+
+---
+
+### ✅ Less drift, less pain
+
+- the base OS is a product  
+- nodes are disposable  
+- the platform stays consistent over time  
+
+---
+
+## Status: Beta-1
+
+This is a **production-grade beta release** target.
+
+The goal is:
+
+- ✅ build all components  
+- ✅ bring up the full environment  
+- ✅ converge reliably  
+- ✅ safe to rerun  
+- ✅ no deploy script editing required  
+
+If something fails:
+
+- the failure should be actionable  
+- logs should be captured  
+- nodes should be replaceable cleanly  
+
+---
+
+## Contributing / Notes
+
+Want to add new workloads?
+
+1. add them to the payload (Ansible/Salt)
+2. rebuild the artifact
+3. deploy fleets
+
+Want different fabrics or planes?
+
+1. edit the networking profile
+2. rebuild
+3. redeploy
+
+Everything starts from the artifact.
+
+---
+
+## Motto
+
+> **Build the world. Every time.**
+
+Because if it can’t be rebuilt from nothing, anywhere — it’s already broken.
