@@ -1,12 +1,26 @@
-
-- name: Verify - basic connectivity and services
-  hosts: all
-  gather_facts: false
+- name: Verify cluster state
+  hosts: master
   become: true
   tasks:
-    - name: Show hostname
-      command: hostname -f
-      register: hn
-      changed_when: false
-    - debug:
-        var: hn.stdout
+    - name: Nodes ready
+      shell: |
+        set -euo pipefail
+        kubectl get nodes -o wide
+        kubectl get nodes | awk 'NR>1{print $2}' | grep -v Ready && exit 1 || true
+      args:
+        executable: /bin/bash
+
+    - name: Cilium healthy
+      shell: |
+        set -euo pipefail
+        cilium status --wait
+      args:
+        executable: /bin/bash
+
+    - name: ArgoCD pods ready
+      shell: |
+        set -euo pipefail
+        kubectl get pods -n argocd
+      args:
+        executable: /bin/bash
+

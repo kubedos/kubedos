@@ -1,6 +1,43 @@
-- name: Install Helm + Cilium (run from cp1)
-  hosts: cp1.unixbox.net
+- name: Install Cilium + Hubble (production default)
+  hosts: master
   become: true
-  roles:
-    - helm
-    - cilium
+  vars:
+    cilium_version: "1.15.6"
+    hubble_enabled: true
+    hubble_ui_enabled: true
+  tasks:
+    - name: Ensure curl/jq present
+      apt:
+        name: [curl, jq]
+        state: present
+        update_cache: true
+
+    - name: Install cilium-cli
+      shell: |
+        set -euo pipefail
+        cd /tmp
+        if command -v cilium >/dev/null 2>&1; then
+          exit 0
+        fi
+        curl -L -o cilium.tar.gz \
+          https://github.com/cilium/cilium-cli/releases/download/v{{ cilium_version }}/cilium-linux-amd64.tar.gz
+        tar -xzf cilium.tar.gz
+        install -m 0755 cilium /usr/local/bin/cilium
+      args:
+        executable: /bin/bash
+
+    - name: Install Cilium (idempotent)
+      shell: |
+        set -euo pipefail
+        if cilium status >/dev/null 2>&1; then
+          echo "cilium already installed"
+          exit 0
+        fi
+        cilium install \
+          --wait \
+          --set hubble.enabled={{ 'true' if hubble_enabled else 'false' }} \
+          --set hubble.ui.enabled={{ 'true' if hubble_ui_enabled else 'false' }}
+        cilium status --wait
+      args:
+        executable: /bin/bash
+
