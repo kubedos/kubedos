@@ -9,3 +9,7 @@ k8s_service_cidr: "10.96.0.0/12"
 
 # Packages / versions
 kubernetes_apt_version: "1.30"
+
+k8s_minor_repo: "v1.31"
+kubernetes_apt_version: "1.31.14-1.1"
+k8s_plane_cidr: "10.100.0.0/16"
