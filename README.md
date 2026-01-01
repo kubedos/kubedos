@@ -31,7 +31,7 @@ kubedos exists to make **full infrastructure replacement & deployment routine & 
 
 Instead of:
 > “pushing configuration to a public useland”
-> "you can "pull" the world from 0 second (the second it passes validation) thus it does not require any "hostname" "ip" "dns" becasue it has a literal "kernel -> kernel" layer 3 network. drastically redusing public exposure and perfect for "darksites"
+> "you can "pull/bootstrap" the world directly from 0 second (the instant the kernel is availiable during the boot process"
 
 ---
 
