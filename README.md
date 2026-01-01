@@ -3,7 +3,7 @@
 > **A single-step installer that treats the OS like a Kubernetes workload.**  
 > Build immutable infrastructure, deploy it anywhere, and rebuild the entire world on demand.
 
-KubeDOS exists because most infrastructure fails for the same boring reason:
+KubeDOS exists to "deliver" "platfourms" as "cattle" anywhere, it also includes basic security and quality of life "tools" as "defaults"
 
 **it can’t be rebuilt exactly the same way, twice.**
 
