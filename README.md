@@ -9,7 +9,7 @@ kubedos is a **build server + target deployment system** that manufactures **sea
 - VMDK for ESXi/vSphere
 - Firecracker / Kata microVM rootfs + kernel bundles
 
-…and then deploys them as **cattle**, not pets, across any substrate you can reach via **SSH** or provider tooling.
+…and then deploys them as **cattle**, across any substrate you can reach via **SSH** or provider tooling.
 
 If a platform cannot be rebuilt from nothing, anywhere, at any time — it is already broken.
 
@@ -21,21 +21,17 @@ Modern infrastructure fails in predictable ways:
 
 - server state drifts over time
 - recovery becomes archaeology
-- image pipelines rot
+- image pipelines rot, disapear or change
 - vendor services disappear
-- some AWS split brain tripps over a cable
+- AWS split brain tripps over a cable
 - restore/backup operations are slow and unreliable
 - "repair it live" becomes the default emergency behavior
 
-kubedos exists to make **full infrastructure replacement routine & boaring**.
+kubedos exists to make **full infrastructure replacement & deployment routine & boaring**. It's designed to rebuild/deploy the **entire** host in a single deployemnt action. 
 
 Instead of:
-> “trying to revive the broken pets”
-
-simply either:
-“rebuild directly to the the new "target" 
-"upload images to another provider, boot and go!"
-"burn to USB and plug it into anything"
+> “pushing configuration to a public useland”
+> "you can "pull" the world from 0 second (the second it passes validation) thus it does not require any "hostname" "ip" "dns" becasue it has a literal "kernel -> kernel" layer 3 network. drastically redusing public exposure and perfect for "darksites"
 
 ---
 
