@@ -253,6 +253,7 @@ The only requirement is:
 
 KubeDOS talks to your target using plain SSH.  
 For the Proxmox example, you want **passwordless SSH** working first.
+it uses standard vm commands, allowing you to add to the base image, ie vlans, disks, ect.
 
 ### Generate an SSH key (if you don’t already have one)
 
@@ -310,7 +311,7 @@ ssh proxmox
 
 ## 3) Run the example deploy
 
-This demo deploys **16 total machines**:
+This demo deploys **16 total machines**: in two stages
 
 - ✅ **1 master**
 - ✅ **15 minions**
