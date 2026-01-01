@@ -32,10 +32,10 @@ kubedos exists to make **full infrastructure replacement routine & boaring**.
 Instead of:
 > “trying to revive the broken pets”
 
-you:
-> “rebuild the herd directly to a "target" 
-> "upload images to Azure, boot and go!"
-> "burn to USB and plug it into anything"
+simply either:
+“rebuild directly to the the new "target" 
+"upload images to another provider, boot and go!"
+"burn to USB and plug it into anything"
 
 ---
 
