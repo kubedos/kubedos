@@ -9,37 +9,39 @@ kubedos is a **build server + target deployment system** that manufactures **sea
 - VMDK for ESXi/vSphere
 - Firecracker / Kata microVM rootfs + kernel bundles
 
-…and then deploys them as **cattle**, not pets, across any substrate you can reach via **SSH** or provider tooling.
+…and then deploys them as **cattle**, across any substrate you can reach via **SSH** or provider tooling.
 
 If a platform cannot be rebuilt from nothing, anywhere, at any time — it is already broken.
 
 ---
 
-## Why kubedos exists (the problem)
+## Why kubedos exists
 
 Modern infrastructure fails in predictable ways:
 
 - server state drifts over time
 - recovery becomes archaeology
-- image pipelines rot
+- image pipelines rot, disapear or change
 - vendor services disappear
+- AWS split brain tripps over a cable
 - restore/backup operations are slow and unreliable
 - "repair it live" becomes the default emergency behavior
 
-kubedos exists to make **full infrastructure replacement routine**.
+kubedos exists to make **full infrastructure replacement & deployment routine & boaring**. It's designed to rebuild/deploy the **entire** host in a single deployemnt action. 
 
 Instead of:
-> “revive the broken pets”
-
-you do:
-> “rebuild the herd”
+> “pushing configuration to a public useland”
+> "you can "pull/bootstrap" the world directly from 0 second (the instant the kernel is availiable during the boot process"
 
 ---
 
 ## The model: Build Server + Targets
 
 ### 1) Build Server (Foundry)
-The Foundry is the authoritative system that:
+The "build-server" is where images, packages and darksite material is downloaded to, or where you can build your own "darksite" repository. There are 2 build "Types" "connected" -> "aka-use the default WAN" .. and "darksite" mode will "download" and build a custom apt directory that can be filled with upto 8TB of artifacts that are "re-packaged" into a fully deployable custom platfourm. ie: it creates custom, bootable "snapshots" that can be anything from an entire OS, to a single micro service.
+
+ethos: Build a reliable platfoum dedicated to providing your services insted of paying amazon, or been locked into a vender.
+
 - builds the OS artifact (kernel → userspace → payload)
 - repacks distro media (Debian, Ubuntu, RHEL, etc.)
 - embeds packages + automation payloads
@@ -47,7 +49,13 @@ The Foundry is the authoritative system that:
 - outputs artifacts for multiple target types
 
 ### 2) Targets (Deployment Substrates)
-Targets are intentionally “dumb”:
+Targets are intentionally “dumb”: but take 2 forms,
+
+- an "image" file that can be "burnt" / "booted-from" or "uploaded"
+  or
+- delivered as a "VM" or "VMDK" or microvm, kubernetes container
+
+IE:
 - Proxmox
 - QEMU/KVM
 - ESXi/vSphere
@@ -55,7 +63,7 @@ Targets are intentionally “dumb”:
 - AWS / Azure / GCP
 - bare metal
 
-If it can boot an image (or accept one via SSH), it can be a target.
+If it can boot an image, it can be a target. The only requirements for the deploy.sh is a bash shell and ssh access.  In this case the "example" deploys 1 master and 15 minions to proxmox, build a highly reliable "base" platfourm that can literally use AWS like a metal hypervisor and get rid of all of the "fluff" simply build your own "platfourm" Ive just "baked-in" a few quality of life toys.
 
 ---
 
