@@ -1,0 +1,8 @@
+[Unit]
+Description=Darksite apply (bootstrap cluster after first boot)
+After=network-online.target salt-master.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/darksite/apply.py

@@ -1,0 +1,25 @@
+- name: Install Helm (package manager)
+  hosts: master
+  become: true
+  vars:
+    helm_version: "v3.16.4"
+  tasks:
+    - name: Ensure curl present
+      apt:
+        name: [curl]
+        state: present
+        update_cache: true
+
+    - name: Download helm
+      get_url:
+        url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/helm.tgz"
+        mode: "0644"
+
+    - name: Install helm binary
+      shell: |
+        set -euo pipefail
+        tar -xzf /tmp/helm.tgz -C /tmp
+        install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+      args:
+        executable: /bin/bash

@@ -1,0 +1,9 @@
+- import_playbook: playbooks/00_preflight.yml
+- import_playbook: playbooks/01_common.yml
+- import_playbook: playbooks/02_etcd_pki.yml
+- import_playbook: playbooks/03_etcd.yml
+- import_playbook: playbooks/99_verify.yml
+- import_playbook: playbooks/10_cilium.yml
+- import_playbook: playbooks/11_helm.yml
+- import_playbook: playbooks/12_argocd.yml
+

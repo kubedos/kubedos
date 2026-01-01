@@ -1,0 +1,20 @@
+- name: Install Argo CD (GitOps)
+  hosts: master
+  become: true
+  vars:
+    argocd_namespace: argocd
+  tasks:
+    - name: Ensure namespace exists
+      shell: |
+        set -euo pipefail
+        kubectl get ns {{ argocd_namespace }} >/dev/null 2>&1 || kubectl create ns {{ argocd_namespace }}
+      args:
+        executable: /bin/bash
+
+    - name: Install Argo CD via manifests (simple, no helm dependency)
+      shell: |
+        set -euo pipefail
+        kubectl apply -n {{ argocd_namespace }} -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        kubectl rollout status deploy/argocd-server -n {{ argocd_namespace }} --timeout=10m
+      args:
+        executable: /bin/bash

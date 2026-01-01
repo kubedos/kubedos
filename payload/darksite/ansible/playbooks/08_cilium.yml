@@ -1,0 +1,6 @@
+- name: Install Helm + Cilium (run from cp1)
+  hosts: cp1.unixbox.net
+  become: true
+  roles:
+    - helm
+    - cilium

@@ -1,0 +1,9 @@
+[Unit]
+Description=Darksite WireGuard reflector (keeps wg configs in sync with Salt roster)
+After=network-online.target salt-master.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/darksite
+ExecStart=/usr/bin/python3 /root/darksite/wg-refresh-planes.py

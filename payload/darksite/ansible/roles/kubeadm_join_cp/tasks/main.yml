@@ -1,0 +1,15 @@
+- name: Read join command + cert key facts from cp1
+  set_fact:
+    join_cp_cmd: "{{ hostvars['cp1.unixbox.net'].join_cp_base.stdout }}"
+    cert_key: "{{ hostvars['cp1.unixbox.net'].cert_key }}"
+
+- name: Join control-plane to cluster (per-host advertise IP)
+  shell: >
+    {{ join_cp_cmd }}
+    --control-plane
+    --certificate-key {{ cert_key }}
+    --node-name {{ inventory_hostname }}
+    --apiserver-advertise-address {{ k8s_node_ip }}
+  args:
+    creates: /etc/kubernetes/admin.conf
+
