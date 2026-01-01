@@ -4395,29 +4395,59 @@ proxmox_all() {
 }
 
 # =============================================================================
-# Run apply.py on master
+# Run apply.py on master (authoritative: /srv/darksite/apply.py)                                                                                                                                  
+# - never touches ~/.ssh/known_hosts
+# - all checks + execution happen under sudo (root-owned payload is fine)
+# - streams apply output live (python -u)
 # =============================================================================
-
 run_apply_on_master() {
   log "Running apply.py on master via ${ADMIN_USER}@${MASTER_LAN}"
-
   local host="${ADMIN_USER}@${MASTER_LAN}"
 
+  # Unit-scoped known_hosts on build server (deterministic, avoids hostkey drift pain)
+  local unit_kh="${UNIT_KNOWN_HOSTS:-/srv/darksite/known_hosts.buildserver}"
+  mkdir -p "$(dirname "$unit_kh")"
+  : > "$unit_kh"
+  chmod 600 "$unit_kh"
+
   ssh \
-    -i /home/todd/.ssh/_ed25519 \
+    -i /home/todd/.ssh/id_ed25519 \
     -o IdentitiesOnly=yes \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=10 \
+    -o ConnectTimeout=20 \
     -o BatchMode=yes \
-    "$host" \
-    bash -lc '
-      set -euo pipefail
-      sleep 15
-      test -r /root/darksite/apply.py
-      command -v python3 >/dev/null
-      sudo -n python3 /root/darksite/apply.py
-    '
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$unit_kh" \
+    "$host" -- bash -s <<'EOSSH'
+set -euo pipefail
+
+APPLY="/srv/darksite/apply.py"
+
+echo "[REMOTE] start: $(date -Is)"
+echo "[REMOTE] hostname: $(hostname -f)"
+echo "[REMOTE] user: $(id -un) uid=$(id -u)"
+echo "[REMOTE] apply path: ${APPLY}"
+
+# Small settle, optional
+sleep 5
+
+echo "[REMOTE] sudo check..."
+sudo -n true
+echo "[REMOTE] sudo OK"
+
+echo "[REMOTE] verifying payload (under sudo)..."
+sudo -n test -f "$APPLY"
+sudo -n ls -la "$APPLY"
+sudo -n python3 -m py_compile "$APPLY"
+echo "[REMOTE] apply.py compiles OK"
+
+# Ensure unbuffered output for live streaming over SSH + journald
+echo "[REMOTE] running apply.py (live output)..."
+sudo -n /usr/bin/python3 -u "$APPLY"
+
+echo "[REMOTE] done: $(date -Is)"
+EOSSH
 }
 
 # =============================================================================
