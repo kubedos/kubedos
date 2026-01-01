@@ -1,9 +1,9 @@
-# KubeDos — Deterministic Platform Manufacturing
+# kubedos — Deterministic Platform Manufacturing
 
 > **Build the platform like Kubernetes builds containers:**  
 > immutable, reproducible, disposable infrastructure — anywhere.
 
-KubeDos is a **build server + target deployment system** that manufactures **sealed platform artifacts**:
+kubedos is a **build server + target deployment system** that manufactures **sealed platform artifacts**:
 - ISO installers
 - QCOW2 / RAW VM images
 - VMDK for ESXi/vSphere
@@ -15,7 +15,7 @@ If a platform cannot be rebuilt from nothing, anywhere, at any time — it is al
 
 ---
 
-## Why KubeDos exists (the problem)
+## Why kubedos exists (the problem)
 
 Modern infrastructure fails in predictable ways:
 
@@ -26,7 +26,7 @@ Modern infrastructure fails in predictable ways:
 - restore/backup operations are slow and unreliable
 - "repair it live" becomes the default emergency behavior
 
-KubeDos exists to make **full infrastructure replacement routine**.
+kubedos exists to make **full infrastructure replacement routine**.
 
 Instead of:
 > “revive the broken pets”
@@ -61,7 +61,7 @@ If it can boot an image (or accept one via SSH), it can be a target.
 
 ## Key idea: “Workloads” are OS images
 
-KubeDos treats the OS itself like a workload artifact.
+kubedos treats the OS itself like a workload artifact.
 
 You can manufacture:
 - a `master` image
@@ -86,7 +86,7 @@ If your build pipeline produces Firecracker images, you can build a `qa-worker` 
 
 ## Ethos: Replace, Don’t Repair
 
-KubeDos is built around this discipline:
+kubedos is built around this discipline:
 
 ✅ **No “SSH in and fix it”**  
 ✅ **Rebuild from artifact**  
@@ -106,7 +106,7 @@ In production:
 
 ## Artifact outputs
 
-KubeDos can output multiple artifact types from the same pipeline:
+kubedos can output multiple artifact types from the same pipeline:
 
 | Artifact Type | Typical Use | Notes |
 |---|---|---|
