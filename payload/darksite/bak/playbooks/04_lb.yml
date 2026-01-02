@@ -1,5 +1,0 @@
-- name: Load balancers (kube-apiserver)
-  hosts: lb
-  become: true
-  roles:
-    - lb_haproxy

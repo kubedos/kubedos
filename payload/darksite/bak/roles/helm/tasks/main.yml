@@ -1,9 +1,0 @@
-- name: Install helm
-  apt:
-    name: "{{ helm_version_pkg }}"
-    state: present
-    update_cache: yes
-
-- name: Ensure kubectl works
-  command: kubectl version --client
-  changed_when: false

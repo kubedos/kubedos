@@ -1,6 +1,0 @@
----
-- name: Install external etcd PKI on control-plane nodes
-  hosts: control_plane
-  become: true
-  roles:
-    - etcd_pki_cp
