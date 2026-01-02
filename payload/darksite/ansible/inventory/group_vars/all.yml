@@ -1,40 +1,35 @@
-# inventory/group_vars/all.yml
+# Global defaults for the whole site.
+# Philosophy:
+# - Discover the latest *stable* Kubernetes release at runtime (or point this at your darksite mirror),
+# - Install that exact version across all nodes,
+# - Hold packages to prevent drift until you intentionally rerun with a new discovered version.
 
----
-# Base networking intent:
-# - Ansible reaches hosts via ansible_host (10.78 mgmt WG)
-# - Kubernetes binds to k8s_node_ip (10.100 cluster NIC)
-#
-# You set k8s_node_ip per-host in inventory.
+# --- Networking / interface selection ---
+# Kubernetes node "InternalIP" and all cluster-facing components must bind to this network.
+# Your inventory should set k8s_node_ip per node (10.100.x.y), but we keep a safe default.
+k8s_node_ip_default: "{{ ansible_default_ipv4.address }}"
 
-# ---- Kubernetes repo channel/minor ----
-# pkgs.k8s.io requires a minor path (e.g. stable:/v1.31).
-# Bump this when YOU want to move to the next Kubernetes minor.
-kubernetes_repo_channel: "stable"
-kubernetes_repo_minor: "v1.31"
+# Subnet where nodes talk to each other for Kubernetes (used for firewall rules / validation)
+k8s_node_subnet: "10.100.10.0/24"
 
-# ---- Kubernetes package version selection ----
-# "auto" = choose newest available from apt cache (from pkgs.k8s.io repo),
-# then hold kubelet/kubeadm/kubectl so nodes remain consistent.
-kubernetes_apt_version: "auto"
+# --- Kubernetes versioning (auto-pin) ---
+# Where to discover "latest stable" (override to your darksite mirror if needed)
+k8s_release_channel_url: "https://dl.k8s.io/release/stable.txt"
 
-# Optional: allow you to override version explicitly if needed.
-# Example: "1.31.14-1.1"
-kubernetes_apt_version_override: ""
+# When true, the playbook will:
+#  1) fetch k8s_full_version from k8s_release_channel_url (e.g. v1.31.14)
+#  2) derive repo minor (e.g. v1.31)
+#  3) install matching kubelet/kubeadm/kubectl versions found in apt
+k8s_version_auto: true
 
-# ---- Kubelet binding ----
-# Force kubelet to use the cluster NIC (10.100) for Node/InternalIP.
-kubelet_pin_node_ip: true
+# When k8s_version_auto is false, set this explicitly (must include leading 'v')
+k8s_full_version: "v1.31.14"
 
-# ---- Container runtime ----
-container_runtime: "containerd"
+# Optional: force a specific repo minor (normally derived from k8s_full_version)
+# Example: "v1.31"
+k8s_minor_repo: ""
 
-# ---- System prereqs (these MUST be true for kubeadm) ----
-k8s_disable_swap: true
-k8s_enable_ip_forward: true
-k8s_load_kernel_modules: true
-
-# ---- CNI MTU note ----
-# Keep your MTU handling in Cilium config; do not “guess” it here.
-# This playbook just ensures kubelet binds to k8s_node_ip.
+# Set true only when you intentionally want to upgrade to the newly-discovered version.
+# With this false, if kube packages are already installed, we won't change them.
+k8s_allow_upgrade: false
 

@@ -1,1 +1,164 @@
-k8s_node_ip: "{{ ansible_default_ipv4.address }}"
+---
+- name: Ensure required variables have sane defaults
+  set_fact:
+    k8s_node_ip_effective: "{{ k8s_node_ip }}"
+
+- name: Install apt prereqs for Kubernetes repo
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - apt-transport-https
+    state: present
+    update_cache: true
+
+- name: Create keyring directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download Kubernetes signing key
+  get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/{{ _k8s_minor_repo }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    mode: "0644"
+  vars:
+    _k8s_minor_repo: "{{ (k8s_minor_repo | trim) if (k8s_minor_repo | trim) else 'v1.31' }}"
+  register: k8s_key_download
+  failed_when: false
+
+- name: Dearmor Kubernetes signing key into apt keyring
+  command: >
+    gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    /etc/apt/keyrings/kubernetes-apt-keyring.asc
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  when: k8s_key_download is not failed
+  changed_when: false
+
+# -------- Version discovery (run once) --------
+- name: Discover latest stable Kubernetes version (run once)
+  when: k8s_version_auto | bool
+  run_once: true
+  delegate_to: localhost
+  vars:
+    _url: "{{ k8s_release_channel_url }}"
+  uri:
+    url: "{{ _url }}"
+    return_content: true
+  register: k8s_stable_txt
+
+- name: Set Kubernetes version facts (run once)
+  run_once: true
+  delegate_to: localhost
+  set_fact:
+    k8s_full_version_resolved: >-
+      {{
+        (k8s_stable_txt.content | trim)
+        if (k8s_version_auto | bool)
+        else (k8s_full_version | trim)
+      }}
+    k8s_semver_resolved: >-
+      {{
+        ((k8s_stable_txt.content | trim) if (k8s_version_auto | bool) else (k8s_full_version | trim))
+        | regex_replace('^v', '')
+      }}
+    k8s_minor_repo_resolved: >-
+      {{
+        (
+          (k8s_minor_repo | trim)
+          if (k8s_minor_repo | trim)
+          else (
+            ((k8s_stable_txt.content | trim) if (k8s_version_auto | bool) else (k8s_full_version | trim))
+            | regex_replace('^v(\d+\.\d+)\..*$', 'v\1')
+          )
+        )
+      }}
+
+- name: Add Kubernetes apt repository (pkgs.k8s.io)
+  copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ hostvars['localhost']['k8s_minor_repo_resolved'] }}/deb/ /
+
+- name: Apt update after adding Kubernetes repo
+  apt:
+    update_cache: true
+
+# -------- Resolve exact package versions available in apt --------
+- name: Query apt for kubelet version matching {{ hostvars['localhost']['k8s_semver_resolved'] }}
+  shell: |
+    set -euo pipefail
+    apt-cache madison kubelet | awk '{print $3}' | grep -E '^{{ hostvars['localhost']['k8s_semver_resolved'] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubelet_pkgver
+  changed_when: false
+
+- name: Query apt for kubeadm version matching {{ hostvars['localhost']['k8s_semver_resolved'] }}
+  shell: |
+    set -euo pipefail
+    apt-cache madison kubeadm | awk '{print $3}' | grep -E '^{{ hostvars['localhost']['k8s_semver_resolved'] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubeadm_pkgver
+  changed_when: false
+
+- name: Query apt for kubectl version matching {{ hostvars['localhost']['k8s_semver_resolved'] }}
+  shell: |
+    set -euo pipefail
+    apt-cache madison kubectl | awk '{print $3}' | grep -E '^{{ hostvars['localhost']['k8s_semver_resolved'] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubectl_pkgver
+  changed_when: false
+
+- name: Fail if requested Kubernetes version is not present in the repo
+  fail:
+    msg: >-
+      Kubernetes {{ hostvars['localhost']['k8s_full_version_resolved'] }} not available in apt repo
+      https://pkgs.k8s.io/core:/stable:/{{ hostvars['localhost']['k8s_minor_repo_resolved'] }}/deb/.
+      Check network access/mirror, or override k8s_release_channel_url / k8s_full_version / k8s_minor_repo.
+  when: kubelet_pkgver.stdout | trim == "" or kubeadm_pkgver.stdout | trim == "" or kubectl_pkgver.stdout | trim == ""
+
+# -------- Install / hold (upgrade-safe) --------
+- name: Check currently installed kubelet version
+  shell: |
+    set -euo pipefail
+    dpkg-query -W -f='${Version}' kubelet 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: kubelet_installed
+  changed_when: false
+
+- name: Install Kubernetes packages (exact version)
+  apt:
+    name:
+      - "kubelet={{ kubelet_pkgver.stdout | trim }}"
+      - "kubeadm={{ kubeadm_pkgver.stdout | trim }}"
+      - "kubectl={{ kubectl_pkgver.stdout | trim }}"
+    state: present
+  when: >
+    (kubelet_installed.stdout | trim == "")
+    or (k8s_allow_upgrade | bool)
+
+- name: Hold Kubernetes packages (prevent drift)
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: Ensure kubelet extra args include --node-ip={{ k8s_node_ip_effective }}
+  copy:
+    dest: /etc/default/kubelet
+    mode: "0644"
+    content: |
+      KUBELET_EXTRA_ARGS=--node-ip={{ k8s_node_ip_effective }}
+  notify: restart kubelet
+
