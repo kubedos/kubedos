@@ -1,11 +1,40 @@
+# inventory/group_vars/all.yml
 
-cluster_domain: unixbox.net
-mgmt_cidr: "10.78.0.0/16"
-master_mgmt_ip: "10.78.0.1"
+---
+# Base networking intent:
+# - Ansible reaches hosts via ansible_host (10.78 mgmt WG)
+# - Kubernetes binds to k8s_node_ip (10.100 cluster NIC)
+#
+# You set k8s_node_ip per-host in inventory.
 
-# Kubernetes cluster networking (for Cilium; adjust as needed)
-k8s_pod_cidr: "10.244.0.0/16"
-k8s_service_cidr: "10.96.0.0/12"
+# ---- Kubernetes repo channel/minor ----
+# pkgs.k8s.io requires a minor path (e.g. stable:/v1.31).
+# Bump this when YOU want to move to the next Kubernetes minor.
+kubernetes_repo_channel: "stable"
+kubernetes_repo_minor: "v1.31"
 
-# Packages / versions
-kubernetes_apt_version: "1.30"
+# ---- Kubernetes package version selection ----
+# "auto" = choose newest available from apt cache (from pkgs.k8s.io repo),
+# then hold kubelet/kubeadm/kubectl so nodes remain consistent.
+kubernetes_apt_version: "auto"
+
+# Optional: allow you to override version explicitly if needed.
+# Example: "1.31.14-1.1"
+kubernetes_apt_version_override: ""
+
+# ---- Kubelet binding ----
+# Force kubelet to use the cluster NIC (10.100) for Node/InternalIP.
+kubelet_pin_node_ip: true
+
+# ---- Container runtime ----
+container_runtime: "containerd"
+
+# ---- System prereqs (these MUST be true for kubeadm) ----
+k8s_disable_swap: true
+k8s_enable_ip_forward: true
+k8s_load_kernel_modules: true
+
+# ---- CNI MTU note ----
+# Keep your MTU handling in Cilium config; do not “guess” it here.
+# This playbook just ensures kubelet binds to k8s_node_ip.
+
