@@ -1,0 +1,10 @@
+- name: Ensure /etc/hosts contains cluster host mappings (management network via ansible_host)
+  blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} KUBEDOS MANAGED HOSTS"
+    create: true
+    block: |
+      {% for h in groups['all'] | sort %}
+      {{ hostvars[h].ansible_host | default(h) }} {{ h }} {{ h.split('.')[0] }}
+      {% endfor %}
+  tags: [hosts]

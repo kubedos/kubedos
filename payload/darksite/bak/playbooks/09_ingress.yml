@@ -1,0 +1,6 @@
+- name: Install ingress-nginx (cp1)
+  hosts: cp1.unixbox.net
+  become: true
+  roles:
+    - helm
+    - ingress_nginx

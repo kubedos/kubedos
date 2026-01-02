@@ -1,8 +1,19 @@
-- name: Install apt prereqs
+---
+- name: Ensure required variables have sane defaults
+  set_fact:
+    k8s_minor_repo: "{{ k8s_minor_repo | default('v1.34') }}"
+    kubernetes_apt_version: "{{ kubernetes_apt_version | default('1.31.14-1.1') }}"
+    k8s_node_ip: "{{ k8s_node_ip | default(ansible_default_ipv4.address) }}"
+  changed_when: false
+
+- name: Install apt prereqs for Kubernetes repo
   apt:
-    name: [ca-certificates, curl, gnupg]
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
     state: present
-    update_cache: yes
+    update_cache: true
 
 - name: Create keyring directory
   file:
@@ -13,36 +24,43 @@
 - name: Download Kubernetes signing key
   get_url:
     url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/Release.key"
-    dest: /etc/apt/keyrings/kubernetes-{{ k8s_minor_repo }}.gpg
+    dest: /tmp/kubernetes-{{ k8s_minor_repo }}.key
     mode: "0644"
 
-- name: Add Kubernetes repo
+- name: Dearmor Kubernetes signing key into apt keyring
+  command: "gpg --dearmor -o /etc/apt/keyrings/kubernetes-{{ k8s_minor_repo }}.gpg /tmp/kubernetes-{{ k8s_minor_repo }}.key"
+  args:
+    creates: "/etc/apt/keyrings/kubernetes-{{ k8s_minor_repo }}.gpg"
+
+- name: Add Kubernetes apt repository
   apt_repository:
-    repo: >
-      deb [signed-by=/etc/apt/keyrings/kubernetes-{{ k8s_minor_repo }}.gpg]
-      https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/ /
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-{{ k8s_minor_repo }}.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/ /"
+    filename: "kubernetes-{{ k8s_minor_repo }}"
     state: present
-    filename: kubernetes
+    update_cache: true
 
-- name: Install kubelet/kubeadm/kubectl
+- name: Install Kubernetes packages (pinned)
   apt:
-    name: [kubelet, kubeadm, kubectl]
+    name:
+      - "kubelet={{ kubernetes_apt_version }}"
+      - "kubeadm={{ kubernetes_apt_version }}"
+      - "kubectl={{ kubernetes_apt_version }}"
     state: present
-    update_cache: yes
+    update_cache: true
 
-- name: Hold kube packages
+- name: Hold Kubernetes packages
   command: apt-mark hold kubelet kubeadm kubectl
   changed_when: false
 
-- name: Pin kubelet to 10.100 node IP
+- name: Configure kubelet to use the Kubernetes (10.100) node IP
   copy:
     dest: /etc/default/kubelet
+    mode: "0644"
     content: |
       KUBELET_EXTRA_ARGS=--node-ip={{ k8s_node_ip }}
 
-- name: Enable kubelet
+- name: Enable kubelet (kubeadm will manage first start)
   service:
     name: kubelet
     enabled: true
-    state: restarted
-
+  changed_when: false

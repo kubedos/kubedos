@@ -1,116 +1,75 @@
 ---
-- name: Sanity-check required vars
-  ansible.builtin.assert:
+- name: Validate inventory groups
+  assert:
     that:
-      - k8s_api_endpoint is defined
-      - k8s_node_ip is defined
-      - k8s_pod_cidr is defined
-      - k8s_svc_cidr is defined
-      - etcd_endpoints is defined
-    fail_msg: >
-      Missing required vars. Need: k8s_api_endpoint, k8s_node_ip, k8s_pod_cidr, k8s_svc_cidr, etcd_endpoints
+      - (groups['control_plane'] | length) > 0
+    fail_msg: "Inventory must have a [control_plane] group."
 
-- name: Render kubeadm init config (external etcd)
-  ansible.builtin.template:
+- name: Set effective Kubernetes IPs (defaults to each node's default route address)
+  set_fact:
+    k8s_node_ip: "{{ k8s_node_ip | default(ansible_default_ipv4.address) }}"
+    k8s_api_endpoint: >-
+      {{
+        (k8s_api_endpoint | default(''))
+        if (k8s_api_endpoint is defined and (k8s_api_endpoint | length) > 0)
+        else
+        (
+          hostvars[groups['lb'][0]].k8s_node_ip
+          | default(hostvars[groups['lb'][0]].ansible_default_ipv4.address)
+        )
+        if (groups['lb'] is defined and (groups['lb'] | length) > 0)
+        else k8s_node_ip
+      }}
+  changed_when: false
+
+- name: Render kubeadm init config
+  template:
     src: kubeadm-config.yaml.j2
     dest: /etc/kubernetes/kubeadm-config.yaml
-    mode: "0600"
+    mode: "0644"
 
-- name: kubeadm init (first control-plane)
-  ansible.builtin.command: >
-    kubeadm init
-    --config /etc/kubernetes/kubeadm-config.yaml
-    --upload-certs
-    {% if cilium_kube_proxy_replacement | default(false) %}--skip-phases=addon/kube-proxy{% endif %}
-  args:
-    creates: /etc/kubernetes/admin.conf
+- name: Check if control-plane already initialized
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: _adminconf
 
-- name: Setup kubeconfig dir for root
-  ansible.builtin.file:
-    path: /root/.kube
-    state: directory
-    mode: "0700"
+- name: Initialize Kubernetes control-plane (kubeadm init)
+  command: kubeadm init --config=/etc/kubernetes/kubeadm-config.yaml --upload-certs
+  when: not _adminconf.stat.exists
+  register: _kubeadm_init
+  changed_when: true
 
-- name: Copy admin kubeconfig for root (kubectl convenience)
-  ansible.builtin.copy:
-    src: /etc/kubernetes/admin.conf
-    dest: /root/.kube/config
-    remote_src: true
-    mode: "0600"
+- name: Ensure kubelet is enabled (kubeadm will start it)
+  service:
+    name: kubelet
+    enabled: true
+  changed_when: false
 
-- name: Wait for apiserver to respond (super-admin)
-  ansible.builtin.command: >
-    kubectl
-    --kubeconfig=/etc/kubernetes/super-admin.conf
-    get --raw=/readyz
-  register: readyz
-  retries: 30
-  delay: 2
-  until: readyz.rc == 0
+- name: Configure kubectl for root
+  when: _adminconf.stat.exists or (_kubeadm_init is defined and _kubeadm_init.rc == 0)
+  block:
+    - file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+    - copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        mode: "0600"
 
-- name: Generate worker join command (super-admin)
-  ansible.builtin.command: kubeadm token create --print-join-command
-  environment:
-    KUBECONFIG: /etc/kubernetes/super-admin.conf
-  register: join_worker
+- name: Create join command for workers
+  command: kubeadm token create --print-join-command
+  register: _join_worker
+  changed_when: false
 
-- name: Upload control-plane certs and get cert key (super-admin)
-  ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
-  environment:
-    KUBECONFIG: /etc/kubernetes/super-admin.conf
-  register: cert_upload
+- name: Extract certificate key for control-plane join
+  shell: "kubeadm init phase upload-certs --upload-certs | tail -n 1"
+  register: _cert_key
+  changed_when: false
 
-- name: Extract cert key from upload output
-  ansible.builtin.set_fact:
-    cert_key: >-
-      {{
-        (cert_upload.stdout_lines
-          | select('match','^[0-9a-f]{64}$')
-          | list
-          | first) | default('')
-      }}
-
-- name: Fail if cert_key could not be extracted
-  ansible.builtin.assert:
-    that:
-      - cert_key | length == 64
-    fail_msg: "Could not extract 64-hex certificate key from kubeadm upload-certs output."
-
-- name: Generate base join command for control-plane (super-admin)
-  ansible.builtin.command: kubeadm token create --print-join-command
-  environment:
-    KUBECONFIG: /etc/kubernetes/super-admin.conf
-  register: join_cp_base
-
-- name: Ensure controller artifacts directory exists
-  ansible.builtin.file:
-    path: /srv/ansible/artifacts
-    state: directory
-    mode: "0755"
-  delegate_to: localhost
-  run_once: true
-
-- name: Write join scripts to controller artifacts directory
-  ansible.builtin.copy:
-    dest: "/srv/ansible/artifacts/{{ item.name }}"
-    mode: "0700"
-    content: "{{ item.content }}"
-  delegate_to: localhost
-  run_once: true
-  loop:
-    - name: join_worker.sh
-      content: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        {{ hostvars[inventory_hostname].join_worker.stdout }} --node-name "${HOSTNAME}"
-
-    - name: join_cp.sh
-      content: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        {{ hostvars[inventory_hostname].join_cp_base.stdout }} \
-          --control-plane \
-          --certificate-key {{ hostvars[inventory_hostname].cert_key }} \
-          --node-name "${HOSTNAME}" \
-          --apiserver-advertise-address "{{ k8s_node_ip }}"
-
+- name: Publish join commands as facts (used by join roles)
+  set_fact:
+    join_command_worker: "{{ _join_worker.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
+    join_command_cp: "{{ _join_worker.stdout }} --control-plane --certificate-key {{ _cert_key.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
+  changed_when: false

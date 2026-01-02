@@ -1,5 +1,5 @@
 - name: Initialize cp1
-  hosts: cp1.unixbox.net
+  hosts: cp-1.unixbox.net
   become: true
   roles:
     - kubeadm_init

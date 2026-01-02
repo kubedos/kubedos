@@ -1,0 +1,31 @@
+---
+# Discover plane IPs from live facts to prevent stale host_vars.
+# This runs early and is safe/idempotent.
+- name: Discover WAN (k8s) node IP from facts (matches k8s_plane_cidr)
+  ansible.builtin.set_fact:
+    _discovered_k8s_node_ip: >-
+      {{
+        (ansible_all_ipv4_addresses
+          | select('match', '^' ~ (k8s_plane_cidr.split('/')[0].rsplit('.',1)[0] | regex_escape) ~ r'\.\d+$')
+          | list | first) | default('')
+      }}
+
+- name: Assert discovered k8s node IP is present on host
+  ansible.builtin.assert:
+    that:
+      - _discovered_k8s_node_ip | length > 0
+    fail_msg: >-
+      Could not discover a 10.100.* address on this host (k8s_plane_cidr={{ k8s_plane_cidr }}).
+      Fix networking or set k8s_node_ip explicitly for {{ inventory_hostname }}.
+
+- name: Fail if host_vars k8s_node_ip conflicts with discovered value
+  ansible.builtin.assert:
+    that:
+      - (k8s_node_ip is not defined) or (k8s_node_ip == _discovered_k8s_node_ip)
+    fail_msg: >-
+      host_vars defines k8s_node_ip={{ k8s_node_ip }} but host actually has {{ _discovered_k8s_node_ip }}
+      for k8s_plane_cidr={{ k8s_plane_cidr }}. Update host_vars or inventory.
+
+- name: Set canonical k8s_node_ip fact (used by etcd/kubeadm/calico)
+  ansible.builtin.set_fact:
+    k8s_node_ip: "{{ _discovered_k8s_node_ip }}"

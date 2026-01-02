@@ -1,0 +1,24 @@
+---
+- name: Compute canonical short hostname (sanitized)
+  ansible.builtin.set_fact:
+    canonical_short_hostname: "{{ inventory_hostname_short | lower | trim | regex_replace('\\s+', '') }}"
+
+- name: Compute cluster domain (sanitized)
+  ansible.builtin.set_fact:
+    cluster_domain_clean: "{{ (cluster_domain | lower | trim) | regex_replace('\\s+', '') }}"
+
+- name: Compute canonical FQDN (sanitized)
+  ansible.builtin.set_fact:
+    canonical_fqdn: "{{ (canonical_short_hostname ~ '.' ~ cluster_domain_clean) | regex_replace('\\s+', '') }}"
+
+- name: Set system hostname (FQDN)
+  ansible.builtin.hostname:
+    name: "{{ canonical_fqdn }}"
+
+- name: Ensure /etc/hosts has 127.0.1.1 entry for hostname
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1 {{ canonical_fqdn }} {{ canonical_short_hostname }}"
+    create: true
+

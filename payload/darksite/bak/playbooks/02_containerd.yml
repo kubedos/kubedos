@@ -1,0 +1,5 @@
+- name: Container runtime
+  hosts: control_plane:workers
+  become: true
+  roles:
+    - containerd

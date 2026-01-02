@@ -1,0 +1,24 @@
+
+- name: Preflight - gather facts and sanity checks
+  hosts: all
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Assert we can reach host via ansible_host
+      debug:
+        msg: "Connected to {{ inventory_hostname }} via {{ ansible_host }}"
+
+    - name: Set cluster management IP fact (WireGuard / 10.78)
+      set_fact:
+        cluster_mgmt_ip: "{{ ansible_host }}"
+
+    - name: Set cluster underlay IP fact (default route address)
+      set_fact:
+        cluster_underlay_ip: "{{ ansible_default_ipv4.address | default('') }}"
+      when: ansible_default_ipv4 is defined
+
+    - name: Show key IPs
+      debug:
+        msg:
+          - "mgmt={{ cluster_mgmt_ip }}"
+          - "underlay={{ cluster_underlay_ip | default('n/a') }}"

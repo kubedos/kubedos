@@ -1,0 +1,5 @@
+- name: Join remaining control planes
+  hosts: control_plane:!cp1.unixbox.net
+  become: true
+  roles:
+    - kubeadm_join_cp

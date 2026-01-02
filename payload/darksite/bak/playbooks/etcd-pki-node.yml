@@ -1,0 +1,129 @@
+---
+# Per-node etcd PKI generation (peer+server) - included from etcd-pki.yml with loop_var 'n'
+# Expects variables:
+#   etcd_pki_local_root
+#   etcd_pki_force_regen
+#   node_dir, node_ip, node_cn
+
+- name: (etcd-pki) Optionally reset per-node PKI dir when forcing regen
+  file:
+    path: "{{ node_dir }}"
+    state: absent
+  when: etcd_pki_force_regen | bool
+
+- name: (etcd-pki) Ensure per-node PKI dir exists
+  file:
+    path: "{{ node_dir }}"
+    state: directory
+    mode: "0700"
+
+# --- PEER CERT (for 2380) ---
+- name: (etcd-pki) Generate peer key
+  command: "openssl genrsa -out {{ node_dir }}/peer.key 2048"
+  args:
+    creates: "{{ node_dir }}/peer.key"
+
+- name: (etcd-pki) Render peer openssl cnf
+  copy:
+    dest: "{{ node_dir }}/peer-openssl.cnf"
+    mode: "0600"
+    content: |
+      [ req ]
+      default_bits       = 2048
+      prompt             = no
+      default_md         = sha256
+      distinguished_name = dn
+      req_extensions     = req_ext
+
+      [ dn ]
+      CN = {{ node_cn }}
+
+      [ req_ext ]
+      subjectAltName = @alt_names
+      keyUsage = critical, digitalSignature, keyEncipherment
+      extendedKeyUsage = serverAuth, clientAuth
+
+      [ alt_names ]
+      DNS.1 = {{ node_cn }}
+      DNS.2 = {{ node_cn.split(".")[0] }}
+      IP.1  = {{ node_ip }}
+
+- name: (etcd-pki) Generate peer CSR
+  command: >
+    openssl req -new
+    -key {{ node_dir }}/peer.key
+    -out {{ node_dir }}/peer.csr
+    -config {{ node_dir }}/peer-openssl.cnf
+  args:
+    creates: "{{ node_dir }}/peer.csr"
+
+- name: (etcd-pki) Sign peer cert
+  command: >
+    openssl x509 -req
+    -in {{ node_dir }}/peer.csr
+    -CA {{ etcd_pki_local_root }}/ca.crt
+    -CAkey {{ etcd_pki_local_root }}/ca.key
+    -CAcreateserial
+    -out {{ node_dir }}/peer.crt
+    -days 3650
+    -sha256
+    -extensions req_ext
+    -extfile {{ node_dir }}/peer-openssl.cnf
+  args:
+    creates: "{{ node_dir }}/peer.crt"
+
+# --- SERVER CERT (for 2379) ---
+- name: (etcd-pki) Generate server key
+  command: "openssl genrsa -out {{ node_dir }}/server.key 2048"
+  args:
+    creates: "{{ node_dir }}/server.key"
+
+- name: (etcd-pki) Render server openssl cnf
+  copy:
+    dest: "{{ node_dir }}/server-openssl.cnf"
+    mode: "0600"
+    content: |
+      [ req ]
+      default_bits       = 2048
+      prompt             = no
+      default_md         = sha256
+      distinguished_name = dn
+      req_extensions     = req_ext
+
+      [ dn ]
+      CN = {{ node_cn }}
+
+      [ req_ext ]
+      subjectAltName = @alt_names
+      keyUsage = critical, digitalSignature, keyEncipherment
+      extendedKeyUsage = serverAuth, clientAuth
+
+      [ alt_names ]
+      DNS.1 = {{ node_cn }}
+      DNS.2 = {{ node_cn.split(".")[0] }}
+      IP.1  = {{ node_ip }}
+      IP.2  = 127.0.0.1
+
+- name: (etcd-pki) Generate server CSR
+  command: >
+    openssl req -new
+    -key {{ node_dir }}/server.key
+    -out {{ node_dir }}/server.csr
+    -config {{ node_dir }}/server-openssl.cnf
+  args:
+    creates: "{{ node_dir }}/server.csr"
+
+- name: (etcd-pki) Sign server cert
+  command: >
+    openssl x509 -req
+    -in {{ node_dir }}/server.csr
+    -CA {{ etcd_pki_local_root }}/ca.crt
+    -CAkey {{ etcd_pki_local_root }}/ca.key
+    -CAcreateserial
+    -out {{ node_dir }}/server.crt
+    -days 3650
+    -sha256
+    -extensions req_ext
+    -extfile {{ node_dir }}/server-openssl.cnf
+  args:
+    creates: "{{ node_dir }}/server.crt"

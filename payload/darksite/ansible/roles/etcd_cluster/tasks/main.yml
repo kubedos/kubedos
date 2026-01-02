@@ -172,7 +172,7 @@
   register: _restart_out
   changed_when: true
   when: _etcd_cfg.changed or _etcd_unit.changed
-  async: 120
+  async: 600
   poll: 5
 
 - name: Start etcd if not running
