@@ -20,7 +20,7 @@ KubeDOS treats the **OS itself** like cattle too.
 
 ---
 
-## What KubeDOS actually is (in plain English)
+## What is KubeDOS?
 
 KubeDOS is a build + deploy system that produces **sealed OS artifacts**, then deploys them as whole workloads:
 
@@ -48,7 +48,7 @@ That means:
 ✅ **No “install dependencies after boot”**  
 ✅ **No “pull packages from the internet”** (dark-site safe)
 
-The OS comes out of the foundry ready to converge.
+The OS comes out of the foundry ready to converge, in a **single** step.
 
 ---
 
