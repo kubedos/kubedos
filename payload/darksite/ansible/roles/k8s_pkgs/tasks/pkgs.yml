@@ -22,7 +22,11 @@
     mode: "0755"
 
 # Official Kubernetes apt repository (pkgs.k8s.io)
+<<<<<<< HEAD
 # This is the correct modern repo.
+=======
+# This is the correct new repo.
+>>>>>>> 0b49604 (update: 2026-01-03 14:49:43)
 - name: Install Kubernetes repository signing key
   shell: |
     set -euo pipefail

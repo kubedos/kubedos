@@ -1132,15 +1132,14 @@ EOF
 Description=KubeOS apply (one-shot)
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=!/var/lib/kubeos/applied.stamp
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /srv/darksite/apply.py
-ExecStartPost=/usr/bin/mkdir -p /var/lib/kubeos
-ExecStartPost=/usr/bin/touch /var/lib/kubeos/applied.stamp
-ExecStartPost=/bin/sh -c 'salt-call --local mine.update 2>/dev/null || true'
-RemainAfterExit=yes
+ExecStart=/usr/bin/env python3 /srv/darksite/apply.py
+WorkingDirectory=/srv/darksite
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target

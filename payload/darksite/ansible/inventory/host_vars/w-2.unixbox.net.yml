@@ -1,1 +1,2 @@
-node_exporter_ip: 10.79.0.10
+---
+k8s_node_ip: "10.100.10.213"
