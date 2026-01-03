@@ -1,23 +1,12 @@
 ---
 # roles/k8s_pkgs/tasks/pkgs.yml
-#
-# Purpose:
-#   Install the base dependency chain and Kubernetes packages in a way that works
-#   on Debian 12/13 minimal images and doesn't assume Ubuntu-only helper packages.
-#
-# Notes:
-#   - software-properties-common is NOT required for Kubernetes installs and may
-#     not exist in some trimmed repos or darksite mirrors (especially on Debian 13).
-#   - We use the official Kubernetes APT repo keyring layout.
-#   - This file is safe for online or darksite setups as long as APT can reach
-#     the repo endpoints configured elsewhere.
 
-- name: Refresh apt cache early (fast fail if repo is broken)
+- name: Update apt cache
   apt:
     update_cache: true
-    cache_valid_time: 0
+    cache_valid_time: 3600
 
-- name: Install base OS dependencies required for Kubernetes repo setup
+- name: Install base packages required for Kubernetes repo and runtime
   apt:
     name:
       - ca-certificates
@@ -28,113 +17,41 @@
       - gnupg
     state: present
     update_cache: true
-  register: _base_deps
-  retries: 5
-  delay: 3
-  until: _base_deps is succeeded
 
-# -------------------------------------------------------------------------
-# Kubernetes APT Repo + Key (official modern keyring method)
-# -------------------------------------------------------------------------
-
-- name: Ensure Kubernetes keyring directory exists
+- name: Ensure /etc/apt/keyrings exists
   file:
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
 
-- name: Download Kubernetes APT repo key (official)
-  get_url:
-    url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
-    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
-    mode: "0644"
-    force: true
+- name: Add Kubernetes apt key
+  shell: |
+    set -euo pipefail
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-- name: Add Kubernetes APT repo (official stable v1.29)
+- name: Add Kubernetes apt repo
   copy:
     dest: /etc/apt/sources.list.d/kubernetes.list
     mode: "0644"
     content: |
-      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
 
 - name: Update apt cache after adding Kubernetes repo
   apt:
     update_cache: true
-    cache_valid_time: 0
 
-# -------------------------------------------------------------------------
-# Install Kubernetes packages
-# -------------------------------------------------------------------------
-
-- name: Install Kubernetes packages (kubelet, kubeadm, kubectl)
+- name: Install Kubernetes components
   apt:
     name:
       - kubelet
       - kubeadm
       - kubectl
     state: present
-    update_cache: false
-  register: _k8s_pkgs
-  retries: 5
-  delay: 3
-  until: _k8s_pkgs is succeeded
 
-- name: Hold Kubernetes packages at current versions
+- name: Hold Kubernetes packages
   shell: |
     set -euo pipefail
     apt-mark hold kubelet kubeadm kubectl
-  args:
-    executable: /bin/bash
-
-# -------------------------------------------------------------------------
-# Container runtime deps (if you install containerd elsewhere, keep this minimal)
-# -------------------------------------------------------------------------
-
-- name: Install baseline networking/sysctl dependencies for Kubernetes
-  apt:
-    name:
-      - ebtables
-      - ethtool
-      - socat
-      - conntrack
-      - ipset
-      - ipvsadm
-    state: present
-    update_cache: false
-  register: _net_deps
-  retries: 5
-  delay: 3
-  until: _net_deps is succeeded
-
-- name: Ensure required kernel modules are loaded (br_netfilter + overlay)
-  copy:
-    dest: /etc/modules-load.d/k8s.conf
-    mode: "0644"
-    content: |
-      overlay
-      br_netfilter
-
-- name: Load kernel modules immediately
-  shell: |
-    set -euo pipefail
-    modprobe overlay || true
-    modprobe br_netfilter || true
-  args:
-    executable: /bin/bash
-
-- name: Apply sysctl params required by Kubernetes
-  copy:
-    dest: /etc/sysctl.d/99-kubernetes-cri.conf
-    mode: "0644"
-    content: |
-      net.bridge.bridge-nf-call-iptables  = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-      net.ipv4.ip_forward                 = 1
-
-- name: Reload sysctl
-  shell: |
-    set -euo pipefail
-    sysctl --system
-  args:
-    executable: /bin/bash
 

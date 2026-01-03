@@ -1,21 +1,31 @@
----
-# Global defaults for the whole site.
-# Kubernetes should bind to the node's primary IPv4 address by default.
-# Override per-host in inventory/host_vars/<hostname>.yml if you want a different plane IP.
+# inventory/group_vars/all.yml
 
+# Global defaults (safe)
+k8s_cluster_name: "kubedos"
+
+# If host_vars doesn't define k8s_node_ip, we default to the primary ipv4 addr
 k8s_node_ip_default: "{{ ansible_default_ipv4.address }}"
-k8s_node_subnet: "10.100.10.0/24"
 
-# Kubernetes versioning / pinning
-k8s_version_auto: true
+# Kubernetes versions (adjust if needed)
+k8s_version: "1.30.0"
+containerd_version: "1.7"
 
-# Only used if k8s_version_auto: false
-k8s_full_version: "v1.31.14"
+# Basic network settings
+pod_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
 
-# Optional override for repo minor (auto-derived from k8s_full_version)
-# Example: "v1.31"
-k8s_minor_repo: ""
+# Load balancer VIP (if you use one)
+# k8s_apiserver_vip: "10.100.10.250"
 
-# Safety switch: set true only when you intentionally want an upgrade
-k8s_allow_upgrade: false
+# HAProxy frontend bind port
+k8s_apiserver_port: 6443
+
+# DNS
+cluster_dns: "10.96.0.10"
+
+# Prevent accidental wg-plane binding
+k8s_prefer_wg_planes: false
+
+# Misc
+apt_update_cache: true
 

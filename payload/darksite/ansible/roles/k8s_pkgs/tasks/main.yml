@@ -1,8 +1,12 @@
 ---
+# roles/k8s_pkgs/tasks/main.yml
+
 - name: Set fact-host (single source of truth host for run_once facts)
   set_fact:
     k8s_fact_host: "{{ ansible_play_hosts_all[0] }}"
 
+# Kubernetes should bind to the primary/default IPv4 address unless explicitly overridden.
+# Per-host k8s_node_ip can be set in inventory/host_vars if you want explicit control.
 - name: Set effective k8s node IP (defaults to ansible_default_ipv4.address)
   set_fact:
     k8s_node_ip_effective: "{{ (k8s_node_ip | default(ansible_default_ipv4.address, true)) | trim }}"
@@ -12,6 +16,11 @@
     that:
       - (k8s_node_ip_effective | default('') | trim) != ""
     fail_msg: "Unable to determine k8s_node_ip_effective (k8s_node_ip not set and ansible_default_ipv4.address missing)."
+
+# Canonicalize so other roles that reference k8s_node_ip just work
+- name: Set canonical k8s_node_ip fact
+  set_fact:
+    k8s_node_ip: "{{ k8s_node_ip_effective }}"
 
 - name: Install Kubernetes packages and dependencies
   include_tasks: pkgs.yml
