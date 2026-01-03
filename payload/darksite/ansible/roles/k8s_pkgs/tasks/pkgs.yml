@@ -1,11 +1,24 @@
 ---
 # roles/k8s_pkgs/tasks/pkgs.yml
 #
-# Installs kubelet/kubeadm/kubectl from the official Kubernetes apt repo.
-# Works on Debian 12/13 and avoids deprecated packages like software-properties-common.
+# Purpose:
+#   Install the base dependency chain and Kubernetes packages in a way that works
+#   on Debian 12/13 minimal images and doesn't assume Ubuntu-only helper packages.
+#
+# Notes:
+#   - software-properties-common is NOT required for Kubernetes installs and may
+#     not exist in some trimmed repos or darksite mirrors (especially on Debian 13).
+#   - We use the official Kubernetes APT repo keyring layout.
+#   - This file is safe for online or darksite setups as long as APT can reach
+#     the repo endpoints configured elsewhere.
 
-- name: Ensure base dependencies are present
-  ansible.builtin.apt:
+- name: Refresh apt cache early (fast fail if repo is broken)
+  apt:
+    update_cache: true
+    cache_valid_time: 0
+
+- name: Install base OS dependencies required for Kubernetes repo setup
+  apt:
     name:
       - ca-certificates
       - curl
@@ -15,57 +28,113 @@
       - gnupg
     state: present
     update_cache: true
+  register: _base_deps
+  retries: 5
+  delay: 3
+  until: _base_deps is succeeded
 
-- name: Create keyrings directory
-  ansible.builtin.file:
+# -------------------------------------------------------------------------
+# Kubernetes APT Repo + Key (official modern keyring method)
+# -------------------------------------------------------------------------
+
+- name: Ensure Kubernetes keyring directory exists
+  file:
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
 
-- name: Compute Kubernetes minor repo (v1.xx)
-  ansible.builtin.set_fact:
-    _k8s_minor_repo_effective: >-
-      {{
-        (k8s_minor_repo | default('', true) | trim)
-        if (k8s_minor_repo | default('', true) | trim) != ''
-        else (k8s_full_version | default('v1.31.14') | regex_replace('^(v[0-9]+\\.[0-9]+).*$', '\\1'))
-      }}
+- name: Download Kubernetes APT repo key (official)
+  get_url:
+    url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    mode: "0644"
+    force: true
 
-- name: Install Kubernetes apt repo key (pkgs.k8s.io)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ _k8s_minor_repo_effective }}/deb/Release.key \
-      | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-  args:
-    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-- name: Add Kubernetes apt repository (pkgs.k8s.io)
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg]
-      https://pkgs.k8s.io/core:/stable:/{{ _k8s_minor_repo_effective }}/deb/
-      /
-    filename: kubernetes
-    state: present
+- name: Add Kubernetes APT repo (official stable v1.29)
+  copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /
 
 - name: Update apt cache after adding Kubernetes repo
-  ansible.builtin.apt:
+  apt:
     update_cache: true
+    cache_valid_time: 0
 
-- name: Install kubelet/kubeadm/kubectl
-  ansible.builtin.apt:
+# -------------------------------------------------------------------------
+# Install Kubernetes packages
+# -------------------------------------------------------------------------
+
+- name: Install Kubernetes packages (kubelet, kubeadm, kubectl)
+  apt:
     name:
       - kubelet
       - kubeadm
       - kubectl
     state: present
+    update_cache: false
+  register: _k8s_pkgs
+  retries: 5
+  delay: 3
+  until: _k8s_pkgs is succeeded
 
-- name: Hold Kubernetes packages (prevent unintended upgrades)
-  ansible.builtin.dpkg_selections:
-    name: "{{ item }}"
-    selection: hold
-  loop:
-    - kubelet
-    - kubeadm
-    - kubectl
+- name: Hold Kubernetes packages at current versions
+  shell: |
+    set -euo pipefail
+    apt-mark hold kubelet kubeadm kubectl
+  args:
+    executable: /bin/bash
+
+# -------------------------------------------------------------------------
+# Container runtime deps (if you install containerd elsewhere, keep this minimal)
+# -------------------------------------------------------------------------
+
+- name: Install baseline networking/sysctl dependencies for Kubernetes
+  apt:
+    name:
+      - ebtables
+      - ethtool
+      - socat
+      - conntrack
+      - ipset
+      - ipvsadm
+    state: present
+    update_cache: false
+  register: _net_deps
+  retries: 5
+  delay: 3
+  until: _net_deps is succeeded
+
+- name: Ensure required kernel modules are loaded (br_netfilter + overlay)
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: |
+      overlay
+      br_netfilter
+
+- name: Load kernel modules immediately
+  shell: |
+    set -euo pipefail
+    modprobe overlay || true
+    modprobe br_netfilter || true
+  args:
+    executable: /bin/bash
+
+- name: Apply sysctl params required by Kubernetes
+  copy:
+    dest: /etc/sysctl.d/99-kubernetes-cri.conf
+    mode: "0644"
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+
+- name: Reload sysctl
+  shell: |
+    set -euo pipefail
+    sysctl --system
+  args:
+    executable: /bin/bash
 
