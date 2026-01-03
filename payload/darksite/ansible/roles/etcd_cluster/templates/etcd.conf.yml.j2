@@ -1,11 +1,17 @@
 # Managed by Ansible
+# Determinism rule: the IP used for etcd URLs MUST match cert SANs.
+# Prefer etcd_ip explicitly set per-host; fallback to cluster_underlay_ip for legacy inventories.
+
+{% set etcd_bind_ip = (etcd_ip | default(cluster_underlay_ip)) %}
+
 name: "{{ inventory_hostname }}"
 data-dir: "/var/lib/etcd"
-listen-peer-urls: "https://{{ cluster_underlay_ip }}:2380"
-initial-advertise-peer-urls: "https://{{ cluster_underlay_ip }}:2380"
 
-listen-client-urls: "https://127.0.0.1:2379,https://{{ cluster_underlay_ip }}:2379"
-advertise-client-urls: "https://{{ cluster_underlay_ip }}:2379"
+listen-peer-urls: "https://{{ etcd_bind_ip }}:2380"
+initial-advertise-peer-urls: "https://{{ etcd_bind_ip }}:2380"
+
+listen-client-urls: "https://127.0.0.1:2379,https://{{ etcd_bind_ip }}:2379"
+advertise-client-urls: "https://{{ etcd_bind_ip }}:2379"
 
 initial-cluster: "{{ etcd_initial_cluster }}"
 initial-cluster-state: "{{ etcd_initial_cluster_state }}"
