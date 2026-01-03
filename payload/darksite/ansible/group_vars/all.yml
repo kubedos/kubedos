@@ -1,3 +1,27 @@
----
-cluster_name: "unixbox"
-cluster_domain: "unixbox.net"
+# Global cluster variables
+
+# ----------------------------
+# DNS / Dynamic updates (Bind/pfSense/etc)
+# ----------------------------
+dns_update_server: "10.100.10.1"
+dns_update_zone: "unixbox.net"
+dns_update_key: ""              # REQUIRED by preflight, leave blank if unused
+
+# ----------------------------
+# Kubernetes cluster
+# ----------------------------
+k8s_cluster_name: "kubedos"
+k8s_service_cidr: "10.96.0.0/12"
+k8s_pod_cidr: "10.244.0.0/16"
+
+# ----------------------------
+# WireGuard / Management overlay
+# ----------------------------
+wg_enabled: true
+wg_network: "10.78.0.0/16"
+
+# ----------------------------
+# Package policy
+# ----------------------------
+apt_install_retries: 3
+apt_install_delay: 5
