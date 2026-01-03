@@ -30,8 +30,9 @@
     fail_msg: >-
       etcd_bind_ip empty. Define etcd_ip per host (recommended), or cluster_underlay_ip.
 
-# Build initial-cluster from inventory using etcd_ip (preferred) per host
-- name: Build etcd_initial_cluster from inventory (run once)
+# Build initial-cluster from inventory using etcd_ip (preferred) per host.
+# IMPORTANT: store this fact on localhost using delegate_facts so all hosts can reference it.
+- name: Build etcd_initial_cluster from inventory (run once, store on localhost)
   ansible.builtin.set_fact:
     etcd_initial_cluster: >-
       {%- set parts = [] -%}
@@ -46,11 +47,12 @@
       {{ parts | join(',') }}
   run_once: true
   delegate_to: localhost
+  delegate_facts: true
 
-- name: Assert etcd_initial_cluster is non-empty
+- name: Assert etcd_initial_cluster is non-empty (from localhost facts)
   ansible.builtin.assert:
     that:
-      - (hostvars['localhost']['etcd_initial_cluster'] | trim) != ""
+      - (hostvars['localhost']['etcd_initial_cluster'] | default('') | trim) != ""
     fail_msg: >-
       etcd_initial_cluster could not be computed. Ensure each etcd host has etcd_ip or cluster_underlay_ip.
 
