@@ -1,15 +1,3 @@
-
-cluster_domain: unixbox.net
-mgmt_cidr: "10.78.0.0/16"
-master_mgmt_ip: "10.78.0.1"
-
-# Kubernetes cluster networking (for Cilium; adjust as needed)
-k8s_pod_cidr: "10.244.0.0/16"
-k8s_service_cidr: "10.96.0.0/12"
-
-# Packages / versions
-kubernetes_apt_version: "1.30"
-
-k8s_minor_repo: "v1.31"
-kubernetes_apt_version: "1.31.14-1.1"
-k8s_plane_cidr: "10.100.0.0/16"
+---
+cluster_name: "unixbox"
+cluster_domain: "unixbox.net"

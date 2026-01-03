@@ -1,0 +1,6 @@
+---
+# Role: hostname_normalize
+# defaults must be a mapping. Never tasks.
+
+# Optional explicit cluster domain. Prefer setting in group_vars/all.yml
+cluster_domain: ""
