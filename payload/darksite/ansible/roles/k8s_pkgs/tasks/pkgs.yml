@@ -1,0 +1,63 @@
+---
+# Kubernetes repo + packages for Debian (12/13)
+# Deterministic + safe to re-run.
+# No software-properties-common (not needed, missing in some Debian 13 images).
+
+- name: Ensure required base packages are installed
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gpg
+      - apt-transport-https
+      - lsb-release
+      - gnupg
+    state: present
+    update_cache: true
+
+- name: Ensure /etc/apt/keyrings exists
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+# Official Kubernetes apt repository (pkgs.k8s.io)
+# This is the correct modern repo.
+- name: Install Kubernetes repository signing key
+  shell: |
+    set -euo pipefail
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+      | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Add Kubernetes apt repository
+  copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+
+- name: apt update
+  apt:
+    update_cache: true
+
+- name: Install Kubernetes packages
+  apt:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+
+- name: Hold Kubernetes packages at current version
+  shell: |
+    set -euo pipefail
+    apt-mark hold kubelet kubeadm kubectl
+  changed_when: false
+
+- name: Enable kubelet
+  systemd:
+    name: kubelet
+    enabled: true
+    state: started
