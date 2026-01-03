@@ -1,6 +1,7 @@
 ---
-# Deploy etcd with mutual TLS (client + peer) on Debian/Ubuntu
-# Deterministic: per-node cert SANs must match the exact IP used in listen/advertise URLs.
+# Role: etcd_cluster
+# Deploy etcd with mutual TLS (client + peer) and deterministic IP/SAN binding.
+# Key rule: the IP used in etcd listen/advertise URLs must be present in cert SANs.
 
 - name: Install etcd server + client (Debian/Ubuntu)
   ansible.builtin.apt:
@@ -29,18 +30,7 @@
     fail_msg: >-
       etcd_bind_ip empty. Define etcd_ip per host (recommended), or cluster_underlay_ip.
 
-- name: Compute etcd initial cluster string deterministically
-  ansible.builtin.set_fact:
-    etcd_initial_cluster: >-
-      {{
-        (groups['etcd'] | sort)
-        | map('extract', hostvars, 'inventory_hostname')
-        | list
-      }}
-  run_once: true
-  delegate_to: localhost
-
-# Build "name=https://ip:2380" for each etcd member
+# Build initial-cluster from inventory using etcd_ip (preferred) per host
 - name: Build etcd_initial_cluster from inventory (run once)
   ansible.builtin.set_fact:
     etcd_initial_cluster: >-
@@ -49,13 +39,11 @@
       {%- set ip = (hostvars[h].etcd_ip
                     | default(hostvars[h].cluster_underlay_ip
                     | default(hostvars[h].ansible_default_ipv4.address))) -%}
-      {%- if (ip | string | trim) == '' -%}
-      {%-   set _ = parts.append('') -%}
-      {%- else -%}
+      {%- if (ip | string | trim) != '' -%}
       {%-   set _ = parts.append(h ~ '=https://' ~ ip ~ ':2380') -%}
       {%- endif -%}
       {%- endfor -%}
-      {{ parts | reject('equalto','') | join(',') }}
+      {{ parts | join(',') }}
   run_once: true
   delegate_to: localhost
 
@@ -105,7 +93,7 @@
 
 # Restart etcd and emit logs on failure (no async polling blindness)
 - name: Restart etcd if config or unit changed
-  ansible.builtin.block:
+  block:
     - name: Restart etcd
       ansible.builtin.systemd:
         name: etcd
