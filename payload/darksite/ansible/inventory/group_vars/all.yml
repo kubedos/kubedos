@@ -1,35 +1,21 @@
+---
 # Global defaults for the whole site.
-# Philosophy:
-# - Discover the latest *stable* Kubernetes release at runtime (or point this at your darksite mirror),
-# - Install that exact version across all nodes,
-# - Hold packages to prevent drift until you intentionally rerun with a new discovered version.
+# Kubernetes should bind to the node's primary IPv4 address by default.
+# Override per-host in inventory/host_vars/<hostname>.yml if you want a different plane IP.
 
-# --- Networking / interface selection ---
-# Kubernetes node "InternalIP" and all cluster-facing components must bind to this network.
-# Your inventory should set k8s_node_ip per node (10.100.x.y), but we keep a safe default.
 k8s_node_ip_default: "{{ ansible_default_ipv4.address }}"
-
-# Subnet where nodes talk to each other for Kubernetes (used for firewall rules / validation)
 k8s_node_subnet: "10.100.10.0/24"
 
-# --- Kubernetes versioning (auto-pin) ---
-# Where to discover "latest stable" (override to your darksite mirror if needed)
-k8s_release_channel_url: "https://dl.k8s.io/release/stable.txt"
-
-# When true, the playbook will:
-#  1) fetch k8s_full_version from k8s_release_channel_url (e.g. v1.31.14)
-#  2) derive repo minor (e.g. v1.31)
-#  3) install matching kubelet/kubeadm/kubectl versions found in apt
+# Kubernetes versioning / pinning
 k8s_version_auto: true
 
-# When k8s_version_auto is false, set this explicitly (must include leading 'v')
+# Only used if k8s_version_auto: false
 k8s_full_version: "v1.31.14"
 
-# Optional: force a specific repo minor (normally derived from k8s_full_version)
+# Optional override for repo minor (auto-derived from k8s_full_version)
 # Example: "v1.31"
 k8s_minor_repo: ""
 
-# Set true only when you intentionally want to upgrade to the newly-discovered version.
-# With this false, if kube packages are already installed, we won't change them.
+# Safety switch: set true only when you intentionally want an upgrade
 k8s_allow_upgrade: false
 
