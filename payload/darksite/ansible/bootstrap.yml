@@ -2,6 +2,8 @@
 - name: Bootstrap base requirements on all hosts
   hosts: all
   become: true
+  gather_facts: false
+
   tasks:
     - name: Ensure python3 exists
       raw: |
@@ -21,10 +23,14 @@
         update_cache: true
 
     - name: Confirm salt binary exists
-      command: command -v salt
+      command:
+        argv:
+          - which
+          - salt
       register: salt_path
       changed_when: false
 
     - name: Print salt location
       debug:
         msg: "salt found at {{ salt_path.stdout }}"
+
