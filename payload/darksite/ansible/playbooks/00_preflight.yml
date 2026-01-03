@@ -1,24 +1,57 @@
-
-- name: Preflight - gather facts and sanity checks
+- name: Preflight - sanity checks + bootstrap requirements
   hosts: all
   gather_facts: true
   become: true
+
   tasks:
-    - name: Assert we can reach host via ansible_host
+    - name: Ensure python3 exists
+      raw: |
+        set -e
+        command -v python3 >/dev/null || (apt-get update && apt-get install -y python3)
+      changed_when: false
+
+    - name: Re-gather facts now that python exists
+      setup:
+
+    - name: Ensure salt-minion is installed
+      apt:
+        name:
+          - salt-minion
+          - salt-common
+        state: present
+        update_cache: true
+
+    - name: Ensure salt-minion service is enabled + running
+      systemd:
+        name: salt-minion
+        enabled: true
+        state: started
+
+    - name: Verify salt-call exists
+      command: salt-call --version
+      register: salt_version
+      changed_when: false
+
+    - name: Show salt-call version
       debug:
-        msg: "Connected to {{ inventory_hostname }} via {{ ansible_host }}"
+        msg: "{{ salt_version.stdout }}"
 
-    - name: Set cluster management IP fact (WireGuard / 10.78)
-      set_fact:
-        cluster_mgmt_ip: "{{ ansible_host }}"
+    - name: Create compatibility salt client wrapper (optional)
+      copy:
+        dest: /usr/local/bin/salt
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          exec /usr/bin/salt-call "$@"
+      when: ansible_facts['os_family'] == "Debian"
 
-    - name: Set cluster underlay IP fact (default route address)
-      set_fact:
-        cluster_underlay_ip: "{{ ansible_default_ipv4.address | default('') }}"
-      when: ansible_default_ipv4 is defined
+    - name: Assert required DNS vars exist
+      assert:
+        that:
+          - dns_update_server is defined
+          - dns_update_zone is defined
+          - dns_update_key is defined
+        fail_msg: >
+          Missing required DNS vars. Define dns_update_server, dns_update_zone,
+          and dns_update_key in group_vars/all.yml
 
-    - name: Show key IPs
-      debug:
-        msg:
-          - "mgmt={{ cluster_mgmt_ip }}"
-          - "underlay={{ cluster_underlay_ip | default('n/a') }}"
