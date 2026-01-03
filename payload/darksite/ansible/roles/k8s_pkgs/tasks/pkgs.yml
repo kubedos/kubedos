@@ -1,10 +1,11 @@
 ---
-# Kubernetes repo + packages for Debian (12/13)
-# Deterministic + safe to re-run.
-# No software-properties-common (not needed, missing in some Debian 13 images).
+# roles/k8s_pkgs/tasks/pkgs.yml
+#
+# Installs kubelet/kubeadm/kubectl from the official Kubernetes apt repo.
+# Works on Debian 12/13 and avoids deprecated packages like software-properties-common.
 
-- name: Ensure required base packages are installed
-  apt:
+- name: Ensure base dependencies are present
+  ansible.builtin.apt:
     name:
       - ca-certificates
       - curl
@@ -15,53 +16,56 @@
     state: present
     update_cache: true
 
-- name: Ensure /etc/apt/keyrings exists
-  file:
+- name: Create keyrings directory
+  ansible.builtin.file:
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
 
-# Official Kubernetes apt repository (pkgs.k8s.io)
-<<<<<<< HEAD
-# This is the correct modern repo.
-=======
-# This is the correct new repo.
->>>>>>> 0b49604 (update: 2026-01-03 14:49:43)
-- name: Install Kubernetes repository signing key
-  shell: |
+- name: Compute Kubernetes minor repo (v1.xx)
+  ansible.builtin.set_fact:
+    _k8s_minor_repo_effective: >-
+      {{
+        (k8s_minor_repo | default('', true) | trim)
+        if (k8s_minor_repo | default('', true) | trim) != ''
+        else (k8s_full_version | default('v1.31.14') | regex_replace('^(v[0-9]+\\.[0-9]+).*$', '\\1'))
+      }}
+
+- name: Install Kubernetes apt repo key (pkgs.k8s.io)
+  ansible.builtin.shell: |
     set -euo pipefail
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key \
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ _k8s_minor_repo_effective }}/deb/Release.key \
       | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
   args:
     creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-- name: Add Kubernetes apt repository
-  copy:
-    dest: /etc/apt/sources.list.d/kubernetes.list
-    mode: "0644"
-    content: |
-      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+- name: Add Kubernetes apt repository (pkgs.k8s.io)
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg]
+      https://pkgs.k8s.io/core:/stable:/{{ _k8s_minor_repo_effective }}/deb/
+      /
+    filename: kubernetes
+    state: present
 
-- name: apt update
-  apt:
+- name: Update apt cache after adding Kubernetes repo
+  ansible.builtin.apt:
     update_cache: true
 
-- name: Install Kubernetes packages
-  apt:
+- name: Install kubelet/kubeadm/kubectl
+  ansible.builtin.apt:
     name:
       - kubelet
       - kubeadm
       - kubectl
     state: present
 
-- name: Hold Kubernetes packages at current version
-  shell: |
-    set -euo pipefail
-    apt-mark hold kubelet kubeadm kubectl
-  changed_when: false
+- name: Hold Kubernetes packages (prevent unintended upgrades)
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
 
-- name: Enable kubelet
-  systemd:
-    name: kubelet
-    enabled: true
-    state: started
