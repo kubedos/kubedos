@@ -2,6 +2,9 @@
 # Copy etcd client PKI (for kube-apiserver talking to etcd) to control-plane nodes.
 # Source artifacts are produced on the controller under /srv/ansible/artifacts/etcd-pki
 
+- name: Build etcd PKI (CA + per-node certs)
+  ansible.builtin.include_tasks: pki.yml
+
 - name: Ensure /etc/kubernetes/pki/etcd exists
   ansible.builtin.file:
     path: /etc/kubernetes/pki/etcd
