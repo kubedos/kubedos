@@ -1,27 +1,18 @@
-# Global cluster variables
+---
+# Global SSH / privilege escalation
+ansible_user: ansible
+ansible_become: true
+ansible_become_method: sudo
+ansible_become_flags: "-n"
+ansible_python_interpreter: /usr/bin/python3
 
-# ----------------------------
-# DNS / Dynamic updates (Bind/pfSense/etc)
-# ----------------------------
-dns_update_server: "10.100.10.1"
-dns_update_zone: "unixbox.net"
-dns_update_key: ""              # REQUIRED by preflight, leave blank if unused
+# Your DNS resolvers (used by dns.sh and optional tasks)
+dns_resolvers:
+  - 10.100.10.2
+  - 10.100.10.3
 
-# ----------------------------
-# Kubernetes cluster
-# ----------------------------
-k8s_cluster_name: "kubedos"
-k8s_service_cidr: "10.96.0.0/12"
-k8s_pod_cidr: "10.244.0.0/16"
+# Optional: if you want strict IPv4 usage everywhere
+force_ipv4: true
 
-# ----------------------------
-# WireGuard / Management overlay
-# ----------------------------
-wg_enabled: true
-wg_network: "10.78.0.0/16"
-
-# ----------------------------
-# Package policy
-# ----------------------------
-apt_install_retries: 3
-apt_install_delay: 5
+# Optional: Salt version expectations
+salt_expected_version: "3006"
