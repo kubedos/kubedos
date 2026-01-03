@@ -1,0 +1,30 @@
+---
+- name: Bootstrap base requirements on all hosts
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure python3 exists
+      raw: |
+        set -e
+        command -v python3 >/dev/null 2>&1 || (apt-get update && apt-get install -y python3)
+      changed_when: false
+
+    - name: Gather facts now that python exists
+      setup:
+
+    - name: Ensure Salt minion + common are installed
+      apt:
+        name:
+          - salt-minion
+          - salt-common
+        state: present
+        update_cache: true
+
+    - name: Confirm salt binary exists
+      command: command -v salt
+      register: salt_path
+      changed_when: false
+
+    - name: Print salt location
+      debug:
+        msg: "salt found at {{ salt_path.stdout }}"
