@@ -1,0 +1,7 @@
+---
+# Whether to also manage /etc/hosts on the Ansible controller (localhost).
+hosts_file_manage_controller: true
+
+# Which hostvar IP to write into /etc/hosts mappings.
+# Default: management IP used by Ansible connectivity.
+hosts_file_ip_var: ansible_host
