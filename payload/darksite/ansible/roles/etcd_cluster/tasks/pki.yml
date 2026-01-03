@@ -1,23 +1,88 @@
 ---
 # etcd PKI (OpenSSL, deterministic)
-# - CA generated once on first etcd node, then distributed
+# - CA is generated ONCE on the controller (localhost) and distributed to all nodes.
 # - Per-node peer + server certs include SANs for:
-#   - etcd_bind_ip (etcd_ip preferred, fallback cluster_underlay_ip)
+#   - etcd_bind_ip (etcd_ip preferred, then cluster_underlay_ip if defined, then ansible_host, then default route IP)
 #   - 127.0.0.1
 #   - inventory hostname + shortname
 
 - name: Compute etcd bind IP (must match SANs + etcd.conf.yml)
   ansible.builtin.set_fact:
-    etcd_bind_ip: "{{ etcd_ip | default(cluster_underlay_ip) }}"
+    etcd_bind_ip: >-
+      {{
+        (
+          [
+            (etcd_ip | default('')),
+            ((cluster_underlay_ip | default('')) if (cluster_underlay_ip is defined) else ''),
+            (ansible_host | default('')),
+            ((ansible_default_ipv4.address | default('')) if (ansible_default_ipv4 is defined) else '')
+          ]
+          | map('string')
+          | map('trim')
+          | select('match', '.+')
+          | list
+        )[0]
+      }}
 
 - name: Assert etcd_bind_ip is set
   ansible.builtin.assert:
     that:
       - (etcd_bind_ip | string | trim) != ""
     fail_msg: >-
-      etcd_bind_ip is empty. Define etcd_ip per host (recommended) or cluster_underlay_ip.
+      etcd_bind_ip is empty. Define etcd_ip per host (recommended),
+      or define cluster_underlay_ip, or ensure ansible_host is set.
 
-- name: Ensure etcd PKI dir exists
+- name: Ensure openssl is present
+  ansible.builtin.package:
+    name: openssl
+    state: present
+
+# ------------------------------------------------------------------------------
+# CA generation on controller (single source of truth)
+# ------------------------------------------------------------------------------
+- name: Ensure controller CA artifact directory exists
+  ansible.builtin.file:
+    path: /srv/ansible/artifacts/etcd-pki
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate CA key on controller (if missing)
+  ansible.builtin.command: openssl genrsa -out /srv/ansible/artifacts/etcd-pki/ca.key 4096
+  args:
+    creates: /srv/ansible/artifacts/etcd-pki/ca.key
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate CA cert on controller (if missing)
+  ansible.builtin.command: >
+    openssl req -x509 -new -nodes
+    -key /srv/ansible/artifacts/etcd-pki/ca.key
+    -subj "/CN=etcd-ca"
+    -days 3650
+    -out /srv/ansible/artifacts/etcd-pki/ca.crt
+  args:
+    creates: /srv/ansible/artifacts/etcd-pki/ca.crt
+  delegate_to: localhost
+  run_once: true
+
+- name: Verify controller CA key matches controller CA cert
+  ansible.builtin.shell: |
+    set -euo pipefail
+    km="$(openssl pkey -in /srv/ansible/artifacts/etcd-pki/ca.key -pubout 2>/dev/null | sha256sum | awk '{print $1}')"
+    cm="$(openssl x509 -in /srv/ansible/artifacts/etcd-pki/ca.crt -pubkey -noout 2>/dev/null | sha256sum | awk '{print $1}')"
+    test "$km" = "$cm"
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+
+# ------------------------------------------------------------------------------
+# Distribute CA to nodes
+# ------------------------------------------------------------------------------
+- name: Ensure etcd PKI dir exists on node
   ansible.builtin.file:
     path: /etc/etcd/pki
     state: directory
@@ -25,51 +90,20 @@
     group: root
     mode: "0700"
 
-- name: Ensure openssl is present
-  ansible.builtin.package:
-    name: openssl
-    state: present
-
-# --- CA on first etcd node ---
-- name: Generate CA key (first etcd only)
-  ansible.builtin.command: openssl genrsa -out /etc/etcd/pki/ca.key 4096
-  args:
-    creates: /etc/etcd/pki/ca.key
-  when: inventory_hostname == (groups['etcd'] | first)
-
-- name: Generate CA cert (first etcd only)
-  ansible.builtin.command: >
-    openssl req -x509 -new -nodes
-    -key /etc/etcd/pki/ca.key
-    -subj "/CN=etcd-ca"
-    -days 3650
-    -out /etc/etcd/pki/ca.crt
-  args:
-    creates: /etc/etcd/pki/ca.crt
-  when: inventory_hostname == (groups['etcd'] | first)
-
-- name: Fetch CA artifacts to controller (first etcd only)
-  ansible.builtin.fetch:
-    src: "/etc/etcd/pki/{{ item }}"
-    dest: "/tmp/etcd-pki/{{ item }}"
-    flat: true
-  loop:
-    - ca.key
-    - ca.crt
-  when: inventory_hostname == (groups['etcd'] | first)
-
-- name: Distribute CA artifacts to all etcd nodes
+- name: Install CA key/cert from controller artifacts (authoritative)
   ansible.builtin.copy:
-    src: "/tmp/etcd-pki/{{ item }}"
-    dest: "/etc/etcd/pki/{{ item }}"
+    src: "/srv/ansible/artifacts/etcd-pki/{{ item.src }}"
+    dest: "/etc/etcd/pki/{{ item.dest }}"
     owner: root
     group: root
-    mode: "{{ '0600' if item == 'ca.key' else '0644' }}"
+    mode: "{{ item.mode }}"
   loop:
-    - ca.key
-    - ca.crt
+    - { src: "ca.key", dest: "ca.key", mode: "0600" }
+    - { src: "ca.crt", dest: "ca.crt", mode: "0644" }
 
-# --- SAN config per node ---
+# ------------------------------------------------------------------------------
+# Per-node SAN config and leaf certs
+# ------------------------------------------------------------------------------
 - name: Write OpenSSL SAN config
   ansible.builtin.copy:
     dest: /etc/etcd/pki/openssl-san.cnf
@@ -125,7 +159,7 @@
   args:
     creates: /etc/etcd/pki/peer.crt
 
-# --- Server cert (client endpoint) ---
+# --- Server cert ---
 - name: Generate server key
   ansible.builtin.command: openssl genrsa -out /etc/etcd/pki/server.key 2048
   args:
