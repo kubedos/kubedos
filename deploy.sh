@@ -4395,11 +4395,6 @@ proxmox_all() {
 }
 
 # =============================================================================
-<<<<<<< HEAD
-# Run apply.py on master (authoritative: /srv/darksite/apply.py)                                                                                                                                  
-=======
-# Run apply.py on master (authoritative: /srv/darksite/apply.py)
->>>>>>> 4491018 (update: 2026-01-01 11:48:33)
 # - never touches ~/.ssh/known_hosts
 # - all checks + execution happen under sudo (root-owned payload is fine)
 # - streams apply output live (python -u)
