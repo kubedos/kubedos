@@ -4,50 +4,60 @@
     name: containerd
     state: present
     update_cache: yes
-    force_apt_get: true
 
-# Force-create the dir even in --check so later forced tasks don't explode.
+# In --check mode, apt doesn't really install packages, so /etc/containerd
+# may not exist unless we force it. This keeps later tasks safe.
 - name: Ensure containerd config directory (real, even in --check)
   ansible.builtin.file:
     path: /etc/containerd
     state: directory
     mode: "0755"
   check_mode: no
-  changed_when: false
 
 - name: Check if containerd config exists
   ansible.builtin.stat:
     path: /etc/containerd/config.toml
   register: containerd_config_stat
 
+# Generate the default config content only when missing.
 - name: Generate default containerd config (stdout)
   ansible.builtin.command: containerd config default
   register: containerd_default_config
-  when: not containerd_config_stat.stat.exists
   changed_when: false
+  when: not containerd_config_stat.stat.exists
 
+# Write the config even in --check mode (so later replace has a file to work with)
 - name: Write default containerd config if missing (real, even in --check)
   ansible.builtin.copy:
     dest: /etc/containerd/config.toml
-    content: "{{ containerd_default_config.stdout }}\n"
+    content: "{{ containerd_default_config.stdout }}"
     owner: root
     group: root
     mode: "0644"
   when: not containerd_config_stat.stat.exists
   check_mode: no
-  changed_when: false
   notify: restart_containerd
 
 - name: Enable SystemdCgroup
   ansible.builtin.replace:
     path: /etc/containerd/config.toml
-    regexp: '^\s*SystemdCgroup\s*=\s*false\s*$'
-    replace: '            SystemdCgroup = true'
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
   notify: restart_containerd
+
+# In --check, the unit file may not exist because apt didn't really install.
+# So we detect the unit and gate service management.
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Set fact if containerd systemd unit exists
+  ansible.builtin.set_fact:
+    containerd_unit_exists: "{{ 'containerd.service' in ansible_facts.services }}"
 
 - name: Enable and start containerd
   ansible.builtin.service:
     name: containerd
     enabled: true
     state: started
+  when: containerd_unit_exists or (not ansible_check_mode)
 
