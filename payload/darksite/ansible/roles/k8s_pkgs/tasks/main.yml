@@ -1,27 +1,231 @@
 ---
-# roles/k8s_pkgs/tasks/main.yml
+# Role: k8s_pkgs
+# Installs kubelet/kubeadm/kubectl from pkgs.k8s.io and configures kubelet --node-ip.
 
+# ------------------------
+# Deterministic fact-host
+# ------------------------
 - name: Set fact-host (single source of truth host for run_once facts)
-  set_fact:
+  ansible.builtin.set_fact:
     k8s_fact_host: "{{ ansible_play_hosts_all[0] }}"
 
-# Kubernetes should bind to the primary/default IPv4 address unless explicitly overridden.
-# Per-host k8s_node_ip can be set in inventory/host_vars if you want explicit control.
-- name: Set effective k8s node IP (defaults to ansible_default_ipv4.address)
-  set_fact:
-    k8s_node_ip_effective: "{{ (k8s_node_ip | default(ansible_default_ipv4.address, true)) | trim }}"
-
-- name: Sanity check effective k8s node IP
-  assert:
+- name: Require k8s_node_ip to be set (deterministic node identity)
+  ansible.builtin.assert:
     that:
-      - (k8s_node_ip_effective | default('') | trim) != ""
-    fail_msg: "Unable to determine k8s_node_ip_effective (k8s_node_ip not set and ansible_default_ipv4.address missing)."
+      - (k8s_node_ip | default('') | trim) != ""
+    fail_msg: >-
+      k8s_node_ip is required but empty. Set per-host k8s_node_ip in inventory/group_vars/host_vars
+      (ideally bound to your intended plane IP, e.g. wg3).
 
-# Canonicalize so other roles that reference k8s_node_ip just work
-- name: Set canonical k8s_node_ip fact
-  set_fact:
-    k8s_node_ip: "{{ k8s_node_ip_effective }}"
+- name: Ensure required variables have sane defaults
+  ansible.builtin.set_fact:
+    k8s_node_ip_effective: "{{ k8s_node_ip | trim }}"
 
-- name: Install Kubernetes packages and dependencies
-  include_tasks: pkgs.yml
+# ------------------------
+# Base prereqs
+# ------------------------
+- name: Install apt prereqs for Kubernetes repo
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - apt-transport-https
+    state: present
+    update_cache: true
+
+- name: Create keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+# ------------------------
+# Version discovery (run once, safe in --check)
+# ------------------------
+- name: Discover latest stable Kubernetes version (run once)
+  ansible.builtin.uri:
+    url: "{{ k8s_release_channel_url }}"
+    return_content: true
+    timeout: 15
+  register: k8s_stable_txt
+  run_once: true
+  delegate_to: localhost
+  check_mode: no
+  changed_when: false
+  failed_when: false
+  when: (k8s_version_auto | default(true) | bool)
+
+- name: Set Kubernetes version facts on fact-host (run once)
+  ansible.builtin.set_fact:
+    # Full version like v1.30.4
+    k8s_full_version_resolved: >-
+      {{
+        (
+          (k8s_stable_txt.get('content','') | trim)
+          if (k8s_version_auto | default(true) | bool)
+          else (k8s_full_version | default('') | trim)
+        )
+      }}
+
+    # Semver like 1.30.4 (no leading v)
+    k8s_semver_resolved: >-
+      {{
+        (
+          (
+            (k8s_stable_txt.get('content','') | trim)
+            if (k8s_version_auto | default(true) | bool)
+            else (k8s_full_version | default('') | trim)
+          )
+          | regex_replace('^v', '')
+        )
+      }}
+
+    # Minor repo selector like v1.30 (used by pkgs.k8s.io path)
+    k8s_minor_repo_resolved: >-
+      {{
+        (
+          (k8s_minor_repo | default('') | trim)
+          if ((k8s_minor_repo | default('') | trim) | length > 0)
+          else
+            (
+              (
+                (k8s_stable_txt.get('content','') | trim)
+                if (k8s_version_auto | default(true) | bool)
+                else (k8s_full_version | default('') | trim)
+              )
+              | regex_replace('^v?(\\d+\\.\\d+)\\..*$', 'v\\1')
+            )
+        )
+      }}
+  run_once: true
+  delegate_to: "{{ k8s_fact_host }}"
+  delegate_facts: true
+  check_mode: no
+
+- name: Fail fast if Kubernetes version could not be resolved
+  ansible.builtin.assert:
+    that:
+      - (hostvars[k8s_fact_host].k8s_full_version_resolved | default('') | trim) | length > 0
+      - (hostvars[k8s_fact_host].k8s_semver_resolved | default('') | trim) | length > 0
+      - (hostvars[k8s_fact_host].k8s_minor_repo_resolved | default('') | trim) | length > 0
+    fail_msg: >-
+      Could not resolve Kubernetes version.
+      If k8s_version_auto=true, ensure controller can fetch {{ k8s_release_channel_url }}.
+      Otherwise set k8s_full_version (and optionally k8s_minor_repo).
+  run_once: true
+  delegate_to: "{{ k8s_fact_host }}"
+
+# ------------------------
+# Repo + signing key
+# ------------------------
+- name: Download Kubernetes signing key (pkgs.k8s.io)
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/{{ hostvars[k8s_fact_host]['k8s_minor_repo_resolved'] }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    mode: "0644"
+  register: k8s_key_download
+  failed_when: false
+
+- name: Dearmor Kubernetes signing key into apt keyring
+  ansible.builtin.command: >
+    gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    /etc/apt/keyrings/kubernetes-apt-keyring.asc
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  when: k8s_key_download is not failed
+  changed_when: false
+
+- name: Add Kubernetes apt repository (pkgs.k8s.io)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ hostvars[k8s_fact_host]['k8s_minor_repo_resolved'] }}/deb/ /
+
+- name: Apt update after adding Kubernetes repo
+  ansible.builtin.apt:
+    update_cache: true
+
+# ------------------------
+# Resolve exact package versions available in apt
+# ------------------------
+- name: Query apt for kubelet version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt-cache madison kubelet | awk '{print $3}' | grep -E '^{{ hostvars[k8s_fact_host]["k8s_semver_resolved"] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubelet_pkgver
+  changed_when: false
+
+- name: Query apt for kubeadm version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt-cache madison kubeadm | awk '{print $3}' | grep -E '^{{ hostvars[k8s_fact_host]["k8s_semver_resolved"] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubeadm_pkgver
+  changed_when: false
+
+- name: Query apt for kubectl version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt-cache madison kubectl | awk '{print $3}' | grep -E '^{{ hostvars[k8s_fact_host]["k8s_semver_resolved"] }}' | head -n1
+  args:
+    executable: /bin/bash
+  register: kubectl_pkgver
+  changed_when: false
+
+- name: Fail if requested Kubernetes version is not present in the repo
+  ansible.builtin.fail:
+    msg: >-
+      Kubernetes {{ hostvars[k8s_fact_host]['k8s_full_version_resolved'] }} not available in apt repo
+      https://pkgs.k8s.io/core:/stable:/{{ hostvars[k8s_fact_host]['k8s_minor_repo_resolved'] }}/deb/.
+      Check network access/mirror, or override k8s_release_channel_url / k8s_full_version / k8s_minor_repo.
+  when: >
+    (kubelet_pkgver.stdout | default('') | trim == "")
+    or (kubeadm_pkgver.stdout | default('') | trim == "")
+    or (kubectl_pkgver.stdout | default('') | trim == "")
+
+# ------------------------
+# Install / hold (upgrade-safe)
+# ------------------------
+- name: Check currently installed kubelet version
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dpkg-query -W -f='${Version}' kubelet 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: kubelet_installed
+  changed_when: false
+
+- name: Install Kubernetes packages (exact version)
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ kubelet_pkgver.stdout | trim }}"
+      - "kubeadm={{ kubeadm_pkgver.stdout | trim }}"
+      - "kubectl={{ kubectl_pkgver.stdout | trim }}"
+    state: present
+  when: >
+    (kubelet_installed.stdout | default('') | trim == "")
+    or (k8s_allow_upgrade | default(false) | bool)
+
+- name: Hold Kubernetes packages (prevent drift)
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: Ensure kubelet extra args include --node-ip={{ k8s_node_ip_effective }}
+  ansible.builtin.copy:
+    dest: /etc/default/kubelet
+    mode: "0644"
+    content: |
+      KUBELET_EXTRA_ARGS=--node-ip={{ k8s_node_ip_effective }}
+  notify: restart kubelet
+
 
