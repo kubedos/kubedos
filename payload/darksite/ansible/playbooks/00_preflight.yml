@@ -45,13 +45,3 @@
           exec /usr/bin/salt-call "$@"
       when: ansible_facts['os_family'] == "Debian"
 
-    - name: Assert required DNS vars exist
-      assert:
-        that:
-          - dns_update_server is defined
-          - dns_update_zone is defined
-          - dns_update_key is defined
-        fail_msg: >
-          Missing required DNS vars. Define dns_update_server, dns_update_zone,
-          and dns_update_key in group_vars/all.yml
-
