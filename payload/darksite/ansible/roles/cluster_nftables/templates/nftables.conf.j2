@@ -1,80 +1,52 @@
-# Managed by Ansible (cluster_nftables)
-# DO NOT EDIT MANUALLY
+#!/usr/sbin/nft -f
 
 flush ruleset
-
-{% set tcp_ports = (cluster_nftables_allowed_tcp_ports | default([])) + (cluster_nftables_extra_tcp_ports | default([])) %}
-{% set udp_ports = (cluster_nftables_allowed_udp_ports | default([])) + (cluster_nftables_extra_udp_ports | default([])) %}
-{% set trusted = (cluster_nftables_trusted_cidrs | default([])) %}
 
 table inet filter {
   chain input {
     type filter hook input priority 0;
-    policy {{ cluster_nftables_input_policy | default('drop') }};
-
-    {% if cluster_nftables_allow_loopback | default(true) %}
-    iif "lo" accept
-    {% endif %}
+    policy drop;
 
     ct state established,related accept
-    ct state invalid drop
+    iif "lo" accept
 
-    {# Allow all from trusted CIDRs if provided (IPv4 -> ip, IPv6 -> ip6) #}
-    {% for cidr in trusted %}
-    {%   set c = (cidr | string | trim) %}
-    {%   if ':' in c %}
-    ip6 saddr {{ c }} accept
-    {%   else %}
-    ip saddr {{ c }} accept
-    {%   endif %}
-    {% endfor %}
-
-    {% if cluster_nftables_allow_icmp | default(true) %}
+    # ICMP for sanity
     ip protocol icmp accept
     ip6 nexthdr icmpv6 accept
-    {% endif %}
 
-    {% if cluster_nftables_allow_ssh | default(true) %}
-    tcp dport {{ cluster_nftables_ssh_port | default(22) }} accept
-    {% endif %}
+    # SSH: allow Ansible over mgmt ONLY from controller
+    ip saddr 10.78.0.1 tcp dport 22 accept
 
-    {% if tcp_ports | length > 0 %}
-    tcp dport { {{ tcp_ports | map('int') | unique | sort | join(', ') }} } accept
-    {% endif %}
+    # SSH: allow normal SSH on underlay
+    ip saddr 10.100.10.0/24 tcp dport 22 accept
 
-    {% if udp_ports | length > 0 %}
-    udp dport { {{ udp_ports | map('int') | unique | sort | join(', ') }} } accept
-    {% endif %}
+    # Kubernetes API on LBs (adjust if this file is used on non-LBs too)
+    tcp dport 6443 accept
 
-    {# Optional extra rules as raw nft lines #}
-    {% for rule in (cluster_nftables_input_extra_rules | default([])) %}
-    {{ rule }}
-    {% endfor %}
+    # WireGuard (if you use it)
+    udp dport 51820 accept
 
-    counter drop
+    # Allow required intra-cluster (you may already have these elsewhere)
+    # etcd client/peer (if etcd nodes)
+    tcp dport { 2379, 2380 } accept
+
+    # kubelet (node)
+    tcp dport 10250 accept
+
+    # nodeport (optional)
+    tcp dport 30000-32767 accept
+    udp dport 30000-32767 accept
   }
 
   chain forward {
     type filter hook forward priority 0;
-    policy {{ cluster_nftables_forward_policy | default('drop') }};
-
+    policy drop;
     ct state established,related accept
-    ct state invalid drop
-
-    {% for rule in (cluster_nftables_forward_extra_rules | default([])) %}
-    {{ rule }}
-    {% endfor %}
-
-    counter drop
   }
 
   chain output {
     type filter hook output priority 0;
-    policy {{ cluster_nftables_output_policy | default('accept') }};
-
-    {% for rule in (cluster_nftables_output_extra_rules | default([])) %}
-    {{ rule }}
-    {% endfor %}
+    policy accept;
   }
 }
 

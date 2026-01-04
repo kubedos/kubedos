@@ -1,32 +1,28 @@
+---
 # inventory/group_vars/all.yml
-#
-# Global defaults for the cluster unit.
-# Keep this file small and authoritative; pin versions via group_vars/all/k8s_versions.yml.
 
-# Cluster identity
-k8s_cluster_name: "kubedos"
+# Planes
+mgmt_cidr: "10.78.0.0/24"
+mgmt_controller_ip: "10.78.0.1"      # you explicitly stated this
+underlay_cidr: "10.100.10.0/24"
 
-# Deterministic node identity (host_vars should define k8s_node_ip per node)
-k8s_node_ip_default: "{{ ansible_default_ipv4.address }}"
+# HARD RULES
+disallow_wg_cidrs:
+  - "10.79.0.0/24"
+  - "10.80.0.0/24"
 
-# Kubernetes networking (consumed by kubeadm_init template)
+# Kubernetes networking
 k8s_pod_cidr: "10.244.0.0/16"
 k8s_svc_cidr: "10.96.0.0/12"
 cluster_dns: "10.96.0.10"
 
-# Kubernetes version for kubeadm (prefer pinned semver from group_vars/all/k8s_versions.yml)
-# kubeadm accepts versions with leading 'v' (recommended).
-k8s_version: "v{{ k8s_semver_pinned | default('1.35.0') }}"
+# Kubernetes should advertise/bind on underlay only
+k8s_bind_plane: "underlay"
+k8s_node_ip_default: "{{ underlay_ip | default(ansible_default_ipv4.address) }}"
 
-# Container runtime channel (containerd role consumes distro packages; keep for intent)
-containerd_version: "1.7"
-
-# HAProxy frontend bind port
+# API endpoint should be on underlay (VIP on LB nodes)
+# Pick a VIP that exists in your underlay subnet and reserve it.
+k8s_api_vip: "10.100.10.200"
 k8s_apiserver_port: 6443
-
-# Prevent accidental wg-plane binding in k8s components unless explicitly enabled
-k8s_prefer_wg_planes: false
-
-# Misc
-apt_update_cache: true
+k8s_control_plane_endpoint: "{{ k8s_api_vip }}:{{ k8s_apiserver_port }}"
 

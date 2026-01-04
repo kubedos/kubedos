@@ -1,75 +1,120 @@
 ---
+# roles/common/tasks/main.yml
 # Common baseline: deterministic apt + baseline packages
-# NOTE: This role assumes passwordless sudo on targets (or run with -K).
-# It is safe to re-run; it does not destroy state.
+# Safe to re-run; does not destroy state.
+#
+# IMPORTANT:
+# - For raw tasks, DO NOT rely on Ansible become/prompt detection.
+# - Use explicit `sudo -n` inside raw commands for deterministic non-interactive behavior.
 
-- name: Preflight | wait for dpkg/apt locks to clear (raw, no python3-apt dependency)
-  become: true
-  become_flags: "{{ ansible_become_flags | default('-H -n') }}"
-  raw: |
-    set -euo pipefail
-    for i in $(seq 1 60); do
-      if fuser /var/lib/dpkg/lock >/dev/null 2>&1; then
-        sleep 2
-        continue
-      fi
-      if fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
-        sleep 2
-        continue
-      fi
-      if fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
-        sleep 2
-        continue
-      fi
-      exit 0
-    done
-    echo "Timed out waiting for dpkg/apt locks" >&2
-    exit 1
+- name: Ensure required variables have sane defaults
+  ansible.builtin.set_fact:
+    common_required_packages: "{{ common_required_packages | default(_common_required_packages_default) }}"
+  vars:
+    _common_required_packages_default:
+      - ca-certificates
+      - curl
+      - gpg
+      - jq
+      - iproute2
+      - nftables
+      - socat
+      - conntrack
+      - ebtables
+      - ethtool
+      - util-linux
+      - rsync
+      - openssh-client
   changed_when: false
 
-- name: Preflight | ensure python3-apt present (raw, lock-safe)
-  become: true
-  become_flags: "{{ ansible_become_flags | default('-H -n') }}"
-  raw: |
-    set -euo pipefail
-    if python3 -c 'import apt' >/dev/null 2>&1; then
-      exit 0
-    fi
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y python3-apt
+- name: Preflight | wait for dpkg/apt locks to clear (raw, explicit sudo -n)
+  become: false
+  ansible.builtin.raw: |
+    sudo -n bash -lc '
+      set -euo pipefail
+      for i in $(seq 1 60); do
+        if fuser /var/lib/dpkg/lock >/dev/null 2>&1; then
+          sleep 2
+          continue
+        fi
+        if fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+          sleep 2
+          continue
+        fi
+        if fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+          sleep 2
+          continue
+        fi
+        exit 0
+      done
+      echo "Timeout waiting for apt/dpkg locks" >&2
+      exit 1
+    '
   changed_when: false
 
-- name: Disable unattended apt background services (determinism)
+- name: Preflight | ensure python3-apt present (raw, explicit sudo -n)
+  become: false
+  ansible.builtin.raw: |
+    sudo -n bash -lc '
+      set -euo pipefail
+      if python3 -c "import apt" >/dev/null 2>&1; then
+        exit 0
+      fi
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y python3-apt
+    '
+  changed_when: false
+
+- name: Discover which apt background units exist (unit-files)
   become: true
-  systemd:
+  ansible.builtin.command: systemctl list-unit-files --no-legend --no-pager
+  register: _unit_files
+  changed_when: false
+
+- name: Compute disable list (only units that exist)
+  ansible.builtin.set_fact:
+    _apt_background_units_present: >-
+      {{
+        _apt_background_units_all
+        | select('in', (_unit_files.stdout_lines | map('regex_replace', '\\s+.*$', '') | list))
+        | list
+      }}
+  vars:
+    _apt_background_units_all:
+      - apt-daily.service
+      - apt-daily.timer
+      - apt-daily-upgrade.service
+      - apt-daily-upgrade.timer
+      - unattended-upgrades.service
+  changed_when: false
+
+- name: Disable unattended apt background services (determinism) — best effort
+  become: true
+  ansible.builtin.systemd:
     name: "{{ item }}"
     enabled: false
     state: stopped
     masked: true
-  loop:
-    - apt-daily.service
-    - apt-daily.timer
-    - apt-daily-upgrade.service
-    - apt-daily-upgrade.timer
-    - unattended-upgrades.service
+  loop: "{{ _apt_background_units_present }}"
+  failed_when: false
 
 - name: Apt update (baseline)
   become: true
-  apt:
+  ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
 
 - name: Ensure baseline packages (required)
   become: true
-  apt:
+  ansible.builtin.apt:
     name: "{{ common_required_packages }}"
     state: present
     update_cache: false
 
 - name: Ensure optional convenience package (software-properties-common)
   become: true
-  apt:
+  ansible.builtin.apt:
     name: software-properties-common
     state: present
     update_cache: false
@@ -77,7 +122,7 @@
   failed_when: false
 
 - name: Warn if software-properties-common is unavailable
-  debug:
+  ansible.builtin.debug:
     msg: "software-properties-common unavailable on {{ inventory_hostname }} (non-fatal)"
   when: _spc is failed
 

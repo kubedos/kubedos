@@ -1,27 +1,24 @@
+---
 - name: Fabric Gate — wait for wg planes + SSH reachability
-  hosts: all
+  hosts: "all:!controller"
   become: true
   gather_facts: false
 
   vars:
-    # Which plane Ansible should use (match your inventory's ansible_host plane)
-    # Example: if ansible_host is 10.78.0.x then this is the plane to gate.
     expected_plane_prefix: "10.78."
     ssh_port: 22
 
-    # wg interfaces you expect everywhere
     wg_ifaces:
       - wg1
       - wg2
       - wg3
 
-    # how long to wait (seconds)
     max_wait: 180
-    step: 5
+    step: 2
 
   tasks:
     - name: Wait for wireguard interfaces to exist
-      shell: |
+      ansible.builtin.shell: |
         set -euo pipefail
         for i in {{ wg_ifaces | join(" ") }}; do
           ip link show "$i" >/dev/null 2>&1 || exit 1
@@ -29,28 +26,31 @@
       args:
         executable: /bin/bash
       register: wg_link
+      changed_when: false
       until: wg_link.rc == 0
       retries: "{{ (max_wait // step) | int }}"
       delay: "{{ step }}"
 
     - name: Wait for plane route to exist
-      shell: |
+      ansible.builtin.shell: |
         set -euo pipefail
         ip route | grep -q "{{ expected_plane_prefix }}"
       args:
         executable: /bin/bash
       register: route_ok
+      changed_when: false
       until: route_ok.rc == 0
       retries: "{{ (max_wait // step) | int }}"
       delay: "{{ step }}"
 
     - name: Wait for SSH port to be reachable on ansible_host
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: "{{ ssh_port }}"
         timeout: "{{ max_wait }}"
+      changed_when: false
 
     - name: Print fabric readiness summary
-      debug:
+      ansible.builtin.debug:
         msg: "Fabric ready on {{ inventory_hostname }} ({{ ansible_host }})"
 
