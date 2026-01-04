@@ -68,11 +68,19 @@
     - unattended-upgrades.service
   failed_when: false
 
+# NOTE:
+# In --check mode, ansible's apt module may still error out with:
+# "python3-apt must be installed to use check mode"
+# even when python3-apt is present (observed on some Debian/Python combos).
+# Workaround: force apt-get backend and explicitly run this task outside check mode.
 - name: Apt update (baseline)
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
     lock_timeout: 300
+    force_apt_get: true
+  check_mode: no
+  changed_when: false
 
 - name: Ensure baseline packages (required)
   ansible.builtin.apt:
@@ -111,3 +119,4 @@
       This is non-fatal. If you rely on add-apt-repository, fix apt sources on that node.
       apt msg: {{ _softprops.msg | default('unknown') }}
   when: _softprops is failed
+
