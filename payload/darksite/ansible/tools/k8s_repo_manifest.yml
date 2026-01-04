@@ -1,0 +1,165 @@
+---
+- name: Kubernetes repo bootstrap + version manifest
+  hosts: "cp:w"
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+
+  vars:
+    # Pin the repo minor you want:
+    k8s_minor_repo: "v1.35"
+
+    # Where to write the pinned versions (on controller)
+    manifest_path: "/srv/ansible/group_vars/all/k8s_versions.yml"
+
+    # Repo URL
+    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
+
+  tasks:
+    - name: Ensure baseline tooling for repo bootstrap
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+      check_mode: no
+
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      check_mode: no
+
+    - name: Fetch Kubernetes repo Release.key
+      ansible.builtin.get_url:
+        url: "{{ k8s_repo_url }}Release.key"
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+        mode: "0644"
+      check_mode: no
+
+    - name: Dearmor Kubernetes key into keyring
+      ansible.builtin.command: >
+        gpg --batch --yes --dearmor
+        -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        /etc/apt/keyrings/kubernetes-apt-keyring.asc
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      check_mode: no
+
+    - name: Install Kubernetes apt source list
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        mode: "0644"
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ k8s_repo_url }} /
+      check_mode: no
+
+    - name: Apt update (capture errors)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        apt-get update 2>&1 | tee /tmp/apt-update.k8s.log
+      args:
+        executable: /bin/bash
+      register: apt_update_out
+      changed_when: false
+      check_mode: no
+
+    - name: Fail loudly if repo is not usable (trust/DNS/TLS)
+      ansible.builtin.fail:
+        msg: |
+          Kubernetes apt repo is not usable on {{ inventory_hostname }}.
+          Repo: {{ k8s_repo_url }}
+
+          Filtered apt-get update output:
+          {{ (apt_update_out.stdout_lines
+              | select('match', '.*(pkgs\\.k8s\\.io|EXPKEYSIG|NO_PUBKEY|not signed|signatures were invalid|Could not resolve|TLS|Handshake).*')
+              | list) | join('\n') }}
+
+          Full log: /tmp/apt-update.k8s.log
+      when: >
+        (apt_update_out.stdout is search('EXPKEYSIG'))
+        or (apt_update_out.stdout is search('NO_PUBKEY'))
+        or (apt_update_out.stdout is search('not signed'))
+        or (apt_update_out.stdout is search('signatures were invalid'))
+        or (apt_update_out.stdout is search('Could not resolve'))
+        or (apt_update_out.stdout is search('TLS'))
+        or (apt_update_out.stdout is search('Handshake'))
+
+    - name: Show available versions (madison)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "== kubelet =="
+        apt-cache madison kubelet || true
+        echo
+        echo "== kubeadm =="
+        apt-cache madison kubeadm || true
+        echo
+        echo "== kubectl =="
+        apt-cache madison kubectl || true
+      args:
+        executable: /bin/bash
+      register: madison
+      changed_when: false
+      check_mode: no
+      run_once: true
+
+    - name: Pick newest deb versions for kubelet/kubeadm/kubectl
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pick() {
+          local p="$1"
+          apt-cache madison "$p" | awk '{print $3}' | LC_ALL=C sort -Vu | tail -n1
+        }
+        kubelet="$(pick kubelet)"
+        kubeadm="$(pick kubeadm)"
+        kubectl="$(pick kubectl)"
+
+        if [ -z "${kubelet}" ] || [ -z "${kubeadm}" ] || [ -z "${kubectl}" ]; then
+          echo "ERROR: one or more packages not present in apt (repo not providing them)"
+          exit 1
+        fi
+
+        semver="${kubelet%%-*}"
+
+        cat <<EOF
+k8s_minor_repo: "{{ k8s_minor_repo }}"
+k8s_repo_url: "{{ k8s_repo_url }}"
+
+k8s_deb_versions:
+  kubelet: "${kubelet}"
+  kubeadm: "${kubeadm}"
+  kubectl: "${kubectl}"
+
+# Derived from kubelet deb version (strip deb revision)
+k8s_semver_pinned: "${semver}"
+EOF
+      args:
+        executable: /bin/bash
+      register: picked
+      changed_when: false
+      check_mode: no
+      run_once: true
+
+    - name: Print picks
+      ansible.builtin.debug:
+        msg:
+          - "MADISON (top):"
+          - "{{ madison.stdout.split('\n') }}"
+          - "PICKED:"
+          - "{{ picked.stdout.split('\n') }}"
+      run_once: true
+
+    - name: Write manifest on controller (commit this)
+      ansible.builtin.copy:
+        dest: "{{ manifest_path }}"
+        mode: "0644"
+        content: |
+          # Generated from apt repo on {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          {{ picked.stdout }}
+      delegate_to: localhost
+      become: false
+      run_once: true
+
