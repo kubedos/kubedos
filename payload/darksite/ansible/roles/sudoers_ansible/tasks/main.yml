@@ -1,0 +1,32 @@
+---
+- name: Ensure sudo package is installed
+  ansible.builtin.apt:
+    name: sudo
+    state: present
+    update_cache: true
+  check_mode: no
+
+- name: Install deterministic sudoers drop-in for ansible (NOPASSWD)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-ansible-nopasswd
+    owner: root
+    group: root
+    mode: "0440"
+    content: |
+      # Managed by Ansible (KubeOS)
+      # Deterministic: no interactive sudo prompts.
+      Defaults:ansible !authenticate
+      Defaults:ansible !requiretty
+      ansible ALL=(ALL) NOPASSWD:ALL
+  check_mode: no
+
+- name: Validate sudoers syntax (visudo)
+  ansible.builtin.command: visudo -cf /etc/sudoers
+  changed_when: false
+  check_mode: no
+
+- name: Validate passwordless sudo works for ansible user (non-interactive)
+  ansible.builtin.command: sudo -n true
+  changed_when: false
+  check_mode: no
+

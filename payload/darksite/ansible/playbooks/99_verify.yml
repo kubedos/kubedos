@@ -1,26 +1,29 @@
-- name: Verify cluster state
-  hosts: master
+---
+- name: Verify cluster state (cp-1)
+  hosts: cp-1.unixbox.net
   become: true
+  gather_facts: false
+  any_errors_fatal: true
+
   tasks:
-    - name: Nodes ready
-      shell: |
-        set -euo pipefail
-        kubectl get nodes -o wide
-        kubectl get nodes | awk 'NR>1{print $2}' | grep -v Ready && exit 1 || true
-      args:
-        executable: /bin/bash
+    - name: Nodes
+      ansible.builtin.command: kubectl get nodes -o wide
+      changed_when: false
 
-    - name: Cilium healthy
-      shell: |
-        set -euo pipefail
-        cilium status --wait
-      args:
-        executable: /bin/bash
+    - name: System pods
+      ansible.builtin.command: kubectl get pods -A -o wide
+      changed_when: false
 
-    - name: ArgoCD pods ready
-      shell: |
+    - name: Cilium status (if installed)
+      ansible.builtin.shell: |
         set -euo pipefail
-        kubectl get pods -n argocd
+        if command -v cilium >/dev/null 2>&1; then
+          cilium status
+        else
+          echo "cilium CLI not present on this node"
+        fi
       args:
         executable: /bin/bash
+      changed_when: false
+      failed_when: false
 

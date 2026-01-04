@@ -1,6 +1,54 @@
-- name: Install ingress-nginx (cp1)
-  hosts: cp1.unixbox.net
+---
+- name: Install ingress-nginx (bootstrap on cp-1)
+  hosts: cp-1.unixbox.net
   become: true
-  roles:
-    - helm
-    - ingress_nginx
+  gather_facts: false
+  any_errors_fatal: true
+
+  vars:
+    ingress_namespace: ingress-nginx
+    ingress_chart_version: "4.11.3"   # pin if desired
+
+  tasks:
+    - name: Assert kubectl exists
+      ansible.builtin.command: kubectl version --client=true
+      changed_when: false
+
+    - name: Install Helm (if missing) - pinned-ish via upstream script
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if command -v helm >/dev/null 2>&1; then
+          helm version
+          exit 0
+        fi
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "${tmpdir}"' EXIT
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 -o "${tmpdir}/get_helm.sh"
+        chmod +x "${tmpdir}/get_helm.sh"
+        "${tmpdir}/get_helm.sh"
+        helm version
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Add ingress-nginx helm repo
+      ansible.builtin.command: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      changed_when: false
+      failed_when: false
+
+    - name: Helm repo update
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: Create namespace
+      ansible.builtin.command: kubectl create ns {{ ingress_namespace }}
+      changed_when: false
+      failed_when: false
+
+    - name: Install ingress-nginx chart
+      ansible.builtin.command: >
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
+        --namespace {{ ingress_namespace }}
+        --version {{ ingress_chart_version }}
+      changed_when: false
+
