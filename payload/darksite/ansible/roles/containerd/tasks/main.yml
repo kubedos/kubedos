@@ -6,26 +6,27 @@
     update_cache: yes
     force_apt_get: true
 
-- name: Ensure containerd config directory
+# Force-create the dir even in --check so later forced tasks don't explode.
+- name: Ensure containerd config directory (real, even in --check)
   ansible.builtin.file:
     path: /etc/containerd
     state: directory
     mode: "0755"
+  check_mode: no
+  changed_when: false
 
 - name: Check if containerd config exists
   ansible.builtin.stat:
     path: /etc/containerd/config.toml
   register: containerd_config_stat
 
-# In --check, Ansible won't actually create the file with "creates:".
-# So we generate the content and then force-write the file even in check mode.
 - name: Generate default containerd config (stdout)
   ansible.builtin.command: containerd config default
   register: containerd_default_config
   when: not containerd_config_stat.stat.exists
   changed_when: false
 
-- name: Write default containerd config if missing (force real write even in --check)
+- name: Write default containerd config if missing (real, even in --check)
   ansible.builtin.copy:
     dest: /etc/containerd/config.toml
     content: "{{ containerd_default_config.stdout }}\n"
