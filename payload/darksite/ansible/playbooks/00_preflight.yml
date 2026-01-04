@@ -1,47 +1,56 @@
-- name: Preflight - sanity checks + bootstrap requirements
+- name: Preflight (bootstrap python + salt minion)
   hosts: all
-  gather_facts: true
   become: true
+  gather_facts: false
+
+  vars:
+    # Set to false if you don't want /usr/local/bin/salt wrapper
+    create_salt_wrapper: true
 
   tasks:
     - name: Ensure python3 exists
       raw: |
         set -e
-        command -v python3 >/dev/null || (apt-get update && apt-get install -y python3)
-      changed_when: false
+        if ! command -v python3 >/dev/null 2>&1; then
+          apt-get update -y
+          apt-get install -y python3 python3-apt
+        fi
+      register: python_bootstrap
+      changed_when: "'install -y python3' in python_bootstrap.stdout or 'Setting up python3' in python_bootstrap.stdout"
+      when: ansible_connection != 'local'
 
     - name: Re-gather facts now that python exists
-      setup:
+      ansible.builtin.setup:
 
     - name: Ensure salt-minion is installed
-      apt:
-        name:
-          - salt-minion
-          - salt-common
+      ansible.builtin.apt:
+        name: salt-minion
         state: present
         update_cache: true
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Ensure salt-minion service is enabled + running
-      systemd:
+      ansible.builtin.service:
         name: salt-minion
-        enabled: true
         state: started
+        enabled: true
+      when: ansible_facts['os_family'] == "Debian"
 
     - name: Verify salt-call exists
-      command: salt-call --version
-      register: salt_version
+      ansible.builtin.command: salt-call --version
+      register: saltcall
       changed_when: false
 
     - name: Show salt-call version
-      debug:
-        msg: "{{ salt_version.stdout }}"
+      ansible.builtin.debug:
+        msg: "{{ saltcall.stdout | default(saltcall.stderr) }}"
 
     - name: Create compatibility salt client wrapper (optional)
-      copy:
+      ansible.builtin.copy:
         dest: /usr/local/bin/salt
         mode: "0755"
         content: |
           #!/bin/sh
-          exec /usr/bin/salt-call "$@"
-      when: ansible_facts['os_family'] == "Debian"
+          exec salt-call --local "$@"
+      when: create_salt_wrapper | bool
 
