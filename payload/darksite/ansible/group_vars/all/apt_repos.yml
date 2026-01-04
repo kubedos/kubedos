@@ -1,27 +1,36 @@
 ---
-# Repo catalog keyed by host class (computed in apt_repos role)
+# NOTE: apt_repos is designed to be "role-driven" by host class (global/etcd/kubernetes/lb/monitoring/storage)
 
-# NOTE: Adjust k8s_minor_repo here once, and the repo line follows.
-k8s_minor_repo: "v1.35"
+# Derive repo minor from pinned semver when available.
+k8s_minor_repo: "v{{ (k8s_semver_pinned | default('1.35.0')).split('.')[0] }}.{{ (k8s_semver_pinned | default('1.35.0')).split('.')[1] }}"
 
 apt_repos_by_class:
   global:
-    # Salt (Broadcom)
-    - name: salt
-      enabled: true
+    - name: saltproject
+      type: list
+      path: /etc/apt/sources.list.d/saltproject.list
+      line: "deb [signed-by=/etc/apt/keyrings/saltproject.gpg] https://packages.broadcom.com/artifactory/saltproject-deb stable main"
+      key_mode: raw
       key_url: "https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public"
-      keyring_path: "/etc/apt/keyrings/salt-archive-keyring.pgp"
-      key_mode: "raw"
-      sources_url: "https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources"
+      keyring_path: /etc/apt/keyrings/saltproject.gpg
+      pin:
+        package: "*"
+        origin: "packages.broadcom.com"
+        priority: 600
 
   kubernetes:
     - name: kubernetes
-      enabled: true
+      type: list
+      path: /etc/apt/sources.list.d/kubernetes.list
+      line: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/ /"
+      key_mode: asc_dearmor
       key_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/Release.key"
-      keyring_path: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-      key_mode: "dearmor"
-      deb_lines:
-        - "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/ /"
+      keyring_path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      keyring_asc_path: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+      pin:
+        package: "kubelet kubeadm kubectl"
+        origin: "pkgs.k8s.io"
+        priority: 1001
 
   monitoring:
     - name: grafana
@@ -33,6 +42,8 @@ apt_repos_by_class:
         - "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main"
 
   storage: []
-  lb: []
   etcd: []
+  lb: []
+  monitoring: []
+  storage: []
 
