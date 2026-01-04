@@ -1,7 +1,8 @@
 ---
 - name: restart_containerd
-  ansible.builtin.service:
+  ansible.builtin.systemd:
     name: containerd
     state: restarted
-  when: (not ansible_check_mode) and ('containerd.service' in ansible_facts.services)
+    daemon_reload: true
+  when: not ansible_check_mode
 
