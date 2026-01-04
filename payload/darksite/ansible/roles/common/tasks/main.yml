@@ -1,61 +1,48 @@
 ---
-# Role: common
-# Baseline OS packages for kube/WG hosts.
-# Key points:
-# - Avoid racing cloud-init/unattended-upgrades apt by waiting for dpkg/apt locks.
-# - Ensure python3-apt is installed *via raw* before using ansible.builtin.apt.
-# - Keep nonessential convenience packages non-fatal.
+# Common baseline: deterministic apt + baseline packages
+# NOTE: This role assumes passwordless sudo on targets (or run with -K).
+# It is safe to re-run; it does not destroy state.
 
 - name: Preflight | wait for dpkg/apt locks to clear (raw, no python3-apt dependency)
-  ansible.builtin.raw: |
+  become: true
+  become_flags: "{{ ansible_become_flags | default('-H -n') }}"
+  raw: |
     set -euo pipefail
-    locks="/var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock"
-    for i in $(seq 1 180); do
-      busy=0
-      for l in $locks; do
-        if [ -e "$l" ] && fuser "$l" >/dev/null 2>&1; then busy=1; fi
-      done
-      if pgrep -x apt-get >/dev/null 2>&1 || pgrep -x apt >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1; then busy=1; fi
-      if [ "$busy" -eq 0 ]; then exit 0; fi
-      sleep 5
+    for i in $(seq 1 60); do
+      if fuser /var/lib/dpkg/lock >/dev/null 2>&1; then
+        sleep 2
+        continue
+      fi
+      if fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+        sleep 2
+        continue
+      fi
+      if fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+        sleep 2
+        continue
+      fi
+      exit 0
     done
-    echo "Timed out waiting for apt/dpkg locks/processes to clear" >&2
-    pgrep -a apt-get || true
-    pgrep -a apt || true
-    pgrep -a dpkg || true
+    echo "Timed out waiting for dpkg/apt locks" >&2
     exit 1
   changed_when: false
 
 - name: Preflight | ensure python3-apt present (raw, lock-safe)
-  ansible.builtin.raw: |
+  become: true
+  become_flags: "{{ ansible_become_flags | default('-H -n') }}"
+  raw: |
     set -euo pipefail
-    if dpkg -s python3-apt >/dev/null 2>&1; then
+    if python3 -c 'import apt' >/dev/null 2>&1; then
       exit 0
     fi
     export DEBIAN_FRONTEND=noninteractive
-    for i in $(seq 1 60); do
-      apt-get -y -q \
-        -o DPkg::Lock::Timeout=300 \
-        -o Dpkg::Options::=--force-confdef \
-        -o Dpkg::Options::=--force-confold \
-        update || true
-
-      if apt-get -y -q \
-        -o DPkg::Lock::Timeout=300 \
-        -o Dpkg::Options::=--force-confdef \
-        -o Dpkg::Options::=--force-confold \
-        install python3-apt; then
-        exit 0
-      fi
-      sleep 5
-    done
-    echo "Failed to install python3-apt after retries" >&2
-    exit 1
+    apt-get update -y
+    apt-get install -y python3-apt
   changed_when: false
 
-# Determinism: prevent background apt timers from interfering mid-run.
 - name: Disable unattended apt background services (determinism)
-  ansible.builtin.systemd:
+  become: true
+  systemd:
     name: "{{ item }}"
     enabled: false
     state: stopped
@@ -66,57 +53,31 @@
     - apt-daily-upgrade.service
     - apt-daily-upgrade.timer
     - unattended-upgrades.service
-  failed_when: false
 
-# NOTE:
-# In --check mode, ansible's apt module may still error out with:
-# "python3-apt must be installed to use check mode"
-# even when python3-apt is present (observed on some Debian/Python combos).
-# Workaround: force apt-get backend and explicitly run this task outside check mode.
 - name: Apt update (baseline)
-  ansible.builtin.apt:
+  become: true
+  apt:
     update_cache: true
     cache_valid_time: 3600
-    lock_timeout: 300
-    force_apt_get: true
-  check_mode: no
-  changed_when: false
 
 - name: Ensure baseline packages (required)
-  ansible.builtin.apt:
-    name:
-      - ca-certificates
-      - curl
-      - gnupg
-      - apt-transport-https
-      - lsb-release
-      - jq
-      - iproute2
-      - iptables
-      - ethtool
-      - conntrack
-      - socat
-      - ebtables
-      - chrony
+  become: true
+  apt:
+    name: "{{ common_required_packages }}"
     state: present
     update_cache: false
-    lock_timeout: 300
 
 - name: Ensure optional convenience package (software-properties-common)
-  ansible.builtin.apt:
-    name:
-      - software-properties-common
+  become: true
+  apt:
+    name: software-properties-common
     state: present
     update_cache: false
-    lock_timeout: 300
-  register: _softprops
+  register: _spc
   failed_when: false
 
 - name: Warn if software-properties-common is unavailable
-  ansible.builtin.debug:
-    msg: >-
-      WARNING: software-properties-common could not be installed on {{ inventory_hostname }}.
-      This is non-fatal. If you rely on add-apt-repository, fix apt sources on that node.
-      apt msg: {{ _softprops.msg | default('unknown') }}
-  when: _softprops is failed
+  debug:
+    msg: "software-properties-common unavailable on {{ inventory_hostname }} (non-fatal)"
+  when: _spc is failed
 

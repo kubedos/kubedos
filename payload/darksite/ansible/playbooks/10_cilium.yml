@@ -1,19 +1,23 @@
-- name: Install Cilium + Hubble (CNI)
-  hosts: master
+---
+# Legacy playbook kept for compatibility.
+# Prefer playbooks/08_cilium.yml (cilium-cli based) going forward.
+
+- name: Install Cilium + Hubble (legacy wrapper)
+  hosts: cp-1.unixbox.net
   become: true
+  gather_facts: false
   vars:
-    cilium_version: "1.15.6"
-    hubble_enabled: true
+    cilium_version: "v0.16.24"
   tasks:
-    - name: Ensure curl + jq present
+    - name: Ensure curl and tar present
       apt:
-        name: [curl, jq]
+        name: [curl, ca-certificates, tar]
         state: present
         update_cache: true
 
     - name: Download cilium cli
       get_url:
-        url: "https://github.com/cilium/cilium-cli/releases/download/v{{ cilium_version }}/cilium-linux-amd64.tar.gz"
+        url: "https://github.com/cilium/cilium-cli/releases/download/{{ cilium_version }}/cilium-linux-amd64.tar.gz"
         dest: "/tmp/cilium-linux-amd64.tar.gz"
         mode: "0644"
 
@@ -27,14 +31,14 @@
     - name: Deploy cilium into cluster (idempotent)
       shell: |
         set -euo pipefail
-        if ! command -v kubectl >/dev/null 2>&1; then
-          echo "kubectl not found"; exit 1
-        fi
-        if cilium status >/dev/null 2>&1; then
-          echo "cilium already installed"
+        cilium version >/dev/null 2>&1 || true
+        # Skip if cilium already present
+        if kubectl -n kube-system get ds cilium >/dev/null 2>&1; then
           exit 0
         fi
-        cilium install --wait --set hubble.enabled={{ 'true' if hubble_enabled else 'false' }}
-        cilium status --wait
+        cilium install --version {{ cilium_chart_version | default('1.15.7') }} --wait
+        cilium hubble enable --ui --wait
       args:
         executable: /bin/bash
+      changed_when: true
+

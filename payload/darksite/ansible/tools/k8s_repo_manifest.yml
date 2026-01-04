@@ -1,17 +1,25 @@
 ---
 - name: Kubernetes repo bootstrap + version manifest (deb pins)
-  hosts: "cp-*:w-*"
+  hosts: "cp:w"
   gather_facts: false
   become: true
   any_errors_fatal: true
 
   vars:
-    k8s_minor_repo: "v1.35"
-    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
-    manifest_path: "/srv/ansible/group_vars/all/k8s_versions.yml"
+    # Pin the Kubernetes repo minor intentionally.
+    # This determines the pkgs.k8s.io apt channel.
+    k8s_minor_repo: "{{ k8s_minor_repo | default('v1.35') }}"
 
+    # Repo URL
+    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
+
+    # Where to write the pinned versions (on controller)
+    manifest_path: "{{ manifest_path | default('/srv/ansible/group_vars/all/k8s_versions.yml') }}"
+
+    # Deterministic timestamp without facts (works with gather_facts: false)
     manifest_stamp: "{{ lookup('ansible.builtin.pipe', 'date -Is') }}"
 
+    # Patterns that indicate apt repo trust/DNS/TLS failures
     fail_patterns:
       - "NO_PUBKEY"
       - "EXPKEYSIG"
@@ -54,7 +62,11 @@
         -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
         /etc/apt/keyrings/kubernetes-apt-keyring.asc
       args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        # We intentionally do not use "creates" so key rotation updates the keyring.
+        # If you prefer strict immutability, add creates and rotate manually.
+        removes: /dev/null
+      register: _k8s_key_dearmor
+      changed_when: _k8s_key_dearmor.rc == 0
       check_mode: no
 
     - name: Install Kubernetes apt source list
@@ -97,6 +109,7 @@
           local p="$1"
           apt-cache madison "$p" | awk '{print $3}' | LC_ALL=C sort -Vu | tail -n1
         }
+
         kubelet="$(pick kubelet || true)"
         kubeadm="$(pick kubeadm || true)"
         kubectl="$(pick kubectl || true)"
@@ -104,6 +117,9 @@
         if [ -z "${kubelet}" ] || [ -z "${kubeadm}" ] || [ -z "${kubectl}" ]; then
           echo "ERROR: one or more packages not present in apt."
           echo "kubelet='${kubelet}' kubeadm='${kubeadm}' kubectl='${kubectl}'"
+          echo
+          echo "DEBUG: apt-cache policy kubelet:"
+          apt-cache policy kubelet || true
           exit 1
         fi
 
@@ -126,12 +142,30 @@
         k8s_semver_pinned: "{{ (picks.stdout_lines | select('match','^semver=') | list | first) | regex_replace('^semver=','') }}"
       run_once: true
 
+    - name: Print picked versions (run once)
+      ansible.builtin.debug:
+        msg:
+          - "Repo:    {{ k8s_repo_url }}"
+          - "kubelet: {{ k8s_deb_kubelet }}"
+          - "kubeadm: {{ k8s_deb_kubeadm }}"
+          - "kubectl: {{ k8s_deb_kubectl }}"
+          - "semver:  {{ k8s_semver_pinned }}"
+      run_once: true
+
     - name: Write manifest on controller (commit this)
       ansible.builtin.copy:
         dest: "{{ manifest_path }}"
         mode: "0644"
         content: |
+          ---
           # Generated {{ manifest_stamp }}
+          # Source: {{ k8s_repo_url }}
+          #
+          # Re-generate:
+          #   ansible-playbook -i inventory/hosts.ini tools/k8s_repo_manifest.yml --become
+          #
+          # Use these pins for deterministic installs.
+
           k8s_minor_repo: "{{ k8s_minor_repo }}"
           k8s_repo_url: "{{ k8s_repo_url }}"
 
