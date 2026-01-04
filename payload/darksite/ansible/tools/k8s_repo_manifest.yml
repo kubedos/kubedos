@@ -6,16 +6,12 @@
   any_errors_fatal: true
 
   vars:
-    # Pin the Kubernetes repo minor intentionally
     k8s_minor_repo: "v1.35"
-
-    # Repo URL
     k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
-
-    # Where to write the pinned versions (on controller)
     manifest_path: "/srv/ansible/group_vars/all/k8s_versions.yml"
 
-    # Patterns that indicate apt repo trust/DNS/TLS failures
+    manifest_stamp: "{{ lookup('ansible.builtin.pipe', 'date -Is') }}"
+
     fail_patterns:
       - "NO_PUBKEY"
       - "EXPKEYSIG"
@@ -130,22 +126,12 @@
         k8s_semver_pinned: "{{ (picks.stdout_lines | select('match','^semver=') | list | first) | regex_replace('^semver=','') }}"
       run_once: true
 
-    - name: Print picked versions
-      ansible.builtin.debug:
-        msg:
-          - "Repo: {{ k8s_repo_url }}"
-          - "kubelet: {{ k8s_deb_kubelet }}"
-          - "kubeadm: {{ k8s_deb_kubeadm }}"
-          - "kubectl: {{ k8s_deb_kubectl }}"
-          - "semver:  {{ k8s_semver_pinned }}"
-      run_once: true
-
     - name: Write manifest on controller (commit this)
       ansible.builtin.copy:
         dest: "{{ manifest_path }}"
         mode: "0644"
         content: |
-          # Generated from apt repo on {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          # Generated {{ manifest_stamp }}
           k8s_minor_repo: "{{ k8s_minor_repo }}"
           k8s_repo_url: "{{ k8s_repo_url }}"
 
