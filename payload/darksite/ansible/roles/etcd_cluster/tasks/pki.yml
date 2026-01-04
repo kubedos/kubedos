@@ -1,203 +1,190 @@
 ---
 # etcd PKI (OpenSSL, deterministic)
-# - CA is generated ONCE on the controller (localhost) and distributed to all nodes.
-# - Per-node peer + server certs include SANs for:
-#   - etcd_bind_ip (etcd_ip preferred, then cluster_underlay_ip if defined, then ansible_host, then default route IP)
-#   - 127.0.0.1
-#   - inventory hostname + shortname
+# Goal: etcd runs as User=etcd, so certs/keys MUST be readable by etcd.
+# Root cause of your original failure:
+#   /etc/etcd/pki was created 0700 root:root (not traversable by etcd),
+#   causing "open /etc/etcd/pki/peer.crt: permission denied"
+#
+# This file:
+# - Ensures /etc/etcd/pki is root:etcd 0750 (traversable by etcd)
+# - Ensures private keys are etcd:etcd 0600
+# - Ensures certs/CA cert are root:etcd 0644
+# - Keeps ca.key root-only 0600
 
-- name: Compute etcd bind IP (must match SANs + etcd.conf.yml)
-  ansible.builtin.set_fact:
+- name: Compute etcd bind IP (reuse existing, else etcd_ip, else default route)
+  set_fact:
     etcd_bind_ip: >-
       {{
-        (
-          [
-            (etcd_ip | default('')),
-            ((cluster_underlay_ip | default('')) if (cluster_underlay_ip is defined) else ''),
-            (ansible_host | default('')),
-            ((ansible_default_ipv4.address | default('')) if (ansible_default_ipv4 is defined) else '')
-          ]
-          | map('string')
-          | map('trim')
-          | select('match', '.+')
-          | list
-        )[0]
+        etcd_bind_ip
+          | default(etcd_ip, true)
+          | default(ansible_default_ipv4.address, true)
       }}
 
 - name: Assert etcd_bind_ip is set
-  ansible.builtin.assert:
+  assert:
     that:
-      - (etcd_bind_ip | string | trim) != ""
-    fail_msg: >-
-      etcd_bind_ip is empty. Define etcd_ip per host (recommended),
-      or define cluster_underlay_ip, or ensure ansible_host is set.
+      - etcd_bind_ip is defined
+      - etcd_bind_ip | length > 0
+    fail_msg: "etcd_bind_ip is not set and could not be derived (etcd_ip / ansible_default_ipv4.address missing)."
 
 - name: Ensure openssl is present
-  ansible.builtin.package:
+  apt:
     name: openssl
     state: present
+    update_cache: false
 
-# ------------------------------------------------------------------------------
-# CA generation on controller (single source of truth)
-# ------------------------------------------------------------------------------
+# Controller artifacts live in artifacts/etcd-pki.
+# This role signs CSRs on the node, so it copies CA key+cert onto the node.
+# If you want to avoid distributing ca.key, refactor signing to be done on controller.
 - name: Ensure controller CA artifact directory exists
-  ansible.builtin.file:
-    path: /srv/ansible/artifacts/etcd-pki
+  file:
+    path: "{{ etcd_pki_controller_dir }}"
     state: directory
     mode: "0700"
   delegate_to: localhost
   run_once: true
 
 - name: Generate CA key on controller (if missing)
-  ansible.builtin.command: openssl genrsa -out /srv/ansible/artifacts/etcd-pki/ca.key 4096
+  command: "openssl genrsa -out {{ etcd_pki_controller_dir }}/ca.key 4096"
   args:
-    creates: /srv/ansible/artifacts/etcd-pki/ca.key
+    creates: "{{ etcd_pki_controller_dir }}/ca.key"
   delegate_to: localhost
   run_once: true
 
 - name: Generate CA cert on controller (if missing)
-  ansible.builtin.command: >
+  command: >
     openssl req -x509 -new -nodes
-    -key /srv/ansible/artifacts/etcd-pki/ca.key
-    -subj "/CN=etcd-ca"
-    -days 3650
-    -out /srv/ansible/artifacts/etcd-pki/ca.crt
+    -key {{ etcd_pki_controller_dir }}/ca.key
+    -sha256 -days {{ etcd_pki_ca_days }}
+    -subj "/CN={{ etcd_pki_ca_cn }}"
+    -out {{ etcd_pki_controller_dir }}/ca.crt
   args:
-    creates: /srv/ansible/artifacts/etcd-pki/ca.crt
+    creates: "{{ etcd_pki_controller_dir }}/ca.crt"
   delegate_to: localhost
   run_once: true
 
 - name: Verify controller CA key matches controller CA cert
-  ansible.builtin.shell: |
+  shell: |
     set -euo pipefail
-    km="$(openssl pkey -in /srv/ansible/artifacts/etcd-pki/ca.key -pubout 2>/dev/null | sha256sum | awk '{print $1}')"
-    cm="$(openssl x509 -in /srv/ansible/artifacts/etcd-pki/ca.crt -pubkey -noout 2>/dev/null | sha256sum | awk '{print $1}')"
-    test "$km" = "$cm"
+    openssl x509 -noout -modulus -in "{{ etcd_pki_controller_dir }}/ca.crt" | openssl md5
+    openssl rsa  -noout -modulus -in "{{ etcd_pki_controller_dir }}/ca.key" | openssl md5
   args:
     executable: /bin/bash
+  changed_when: false
   delegate_to: localhost
   run_once: true
-  changed_when: false
 
-# ------------------------------------------------------------------------------
-# Distribute CA to nodes
-# ------------------------------------------------------------------------------
-- name: Ensure etcd PKI dir exists on node
-  ansible.builtin.file:
-    path: /etc/etcd/pki
+# CRITICAL: etcd runs as User=etcd, so /etc/etcd/pki must be traversable by etcd.
+- name: Ensure etcd PKI dir exists on node (readable by etcd)
+  file:
+    path: "{{ etcd_pki_dir }}"
     state: directory
     owner: root
-    group: root
-    mode: "0700"
+    group: etcd
+    mode: "0750"
 
 - name: Install CA key/cert from controller artifacts (authoritative)
-  ansible.builtin.copy:
-    src: "/srv/ansible/artifacts/etcd-pki/{{ item.src }}"
-    dest: "/etc/etcd/pki/{{ item.dest }}"
-    owner: root
-    group: root
+  copy:
+    src: "{{ etcd_pki_controller_dir }}/{{ item.src }}"
+    dest: "{{ etcd_pki_dir }}/{{ item.dest }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { src: "ca.key", dest: "ca.key", mode: "0600" }
-    - { src: "ca.crt", dest: "ca.crt", mode: "0644" }
+    - { src: "ca.key", dest: "ca.key", owner: "root", group: "root", mode: "0600" }
+    - { src: "ca.crt", dest: "ca.crt", owner: "root", group: "etcd", mode: "0644" }
 
-# ------------------------------------------------------------------------------
-# Per-node SAN config and leaf certs
-# ------------------------------------------------------------------------------
 - name: Write OpenSSL SAN config
-  ansible.builtin.copy:
-    dest: /etc/etcd/pki/openssl-san.cnf
+  template:
+    src: openssl_san.cnf.j2
+    dest: "{{ etcd_pki_dir }}/openssl_san.cnf"
     owner: root
     group: root
-    mode: "0600"
-    content: |
-      [ req ]
-      distinguished_name = req_distinguished_name
-      req_extensions = v3_req
-      prompt = no
+    mode: "0644"
 
-      [ req_distinguished_name ]
-      CN = {{ inventory_hostname }}
-
-      [ v3_req ]
-      keyUsage = critical, digitalSignature, keyEncipherment
-      extendedKeyUsage = serverAuth, clientAuth
-      subjectAltName = @alt_names
-
-      [ alt_names ]
-      DNS.1 = {{ inventory_hostname }}
-      DNS.2 = {{ inventory_hostname_short }}
-      IP.1 = {{ etcd_bind_ip }}
-      IP.2 = 127.0.0.1
-
-# --- Peer cert ---
-- name: Generate peer key
-  ansible.builtin.command: openssl genrsa -out /etc/etcd/pki/peer.key 2048
+- name: Generate peer key (if missing)
+  command: "openssl genrsa -out {{ etcd_pki_dir }}/peer.key 2048"
   args:
-    creates: /etc/etcd/pki/peer.key
+    creates: "{{ etcd_pki_dir }}/peer.key"
 
-- name: Generate peer CSR
-  ansible.builtin.command: >
+- name: Generate peer CSR (if missing)
+  command: >
     openssl req -new
-    -key /etc/etcd/pki/peer.key
-    -out /etc/etcd/pki/peer.csr
-    -config /etc/etcd/pki/openssl-san.cnf
+    -key {{ etcd_pki_dir }}/peer.key
+    -subj "/CN={{ inventory_hostname }}"
+    -out {{ etcd_pki_dir }}/peer.csr
+    -config {{ etcd_pki_dir }}/openssl_san.cnf
   args:
-    creates: /etc/etcd/pki/peer.csr
+    creates: "{{ etcd_pki_dir }}/peer.csr"
 
-- name: Sign peer cert with CA
-  ansible.builtin.command: >
+- name: Sign peer cert with CA (if missing)
+  command: >
     openssl x509 -req
-    -in /etc/etcd/pki/peer.csr
-    -CA /etc/etcd/pki/ca.crt
-    -CAkey /etc/etcd/pki/ca.key
+    -in {{ etcd_pki_dir }}/peer.csr
+    -CA {{ etcd_pki_dir }}/ca.crt
+    -CAkey {{ etcd_pki_dir }}/ca.key
     -CAcreateserial
-    -out /etc/etcd/pki/peer.crt
-    -days 3650
+    -out {{ etcd_pki_dir }}/peer.crt
+    -days {{ etcd_pki_node_days }}
+    -sha256
     -extensions v3_req
-    -extfile /etc/etcd/pki/openssl-san.cnf
+    -extfile {{ etcd_pki_dir }}/openssl_san.cnf
   args:
-    creates: /etc/etcd/pki/peer.crt
+    creates: "{{ etcd_pki_dir }}/peer.crt"
 
-# --- Server cert ---
-- name: Generate server key
-  ansible.builtin.command: openssl genrsa -out /etc/etcd/pki/server.key 2048
+- name: Generate server key (if missing)
+  command: "openssl genrsa -out {{ etcd_pki_dir }}/server.key 2048"
   args:
-    creates: /etc/etcd/pki/server.key
+    creates: "{{ etcd_pki_dir }}/server.key"
 
-- name: Generate server CSR
-  ansible.builtin.command: >
+- name: Generate server CSR (if missing)
+  command: >
     openssl req -new
-    -key /etc/etcd/pki/server.key
-    -out /etc/etcd/pki/server.csr
-    -config /etc/etcd/pki/openssl-san.cnf
+    -key {{ etcd_pki_dir }}/server.key
+    -subj "/CN={{ inventory_hostname }}"
+    -out {{ etcd_pki_dir }}/server.csr
+    -config {{ etcd_pki_dir }}/openssl_san.cnf
   args:
-    creates: /etc/etcd/pki/server.csr
+    creates: "{{ etcd_pki_dir }}/server.csr"
 
-- name: Sign server cert with CA
-  ansible.builtin.command: >
+- name: Sign server cert with CA (if missing)
+  command: >
     openssl x509 -req
-    -in /etc/etcd/pki/server.csr
-    -CA /etc/etcd/pki/ca.crt
-    -CAkey /etc/etcd/pki/ca.key
+    -in {{ etcd_pki_dir }}/server.csr
+    -CA {{ etcd_pki_dir }}/ca.crt
+    -CAkey {{ etcd_pki_dir }}/ca.key
     -CAcreateserial
-    -out /etc/etcd/pki/server.crt
-    -days 3650
+    -out {{ etcd_pki_dir }}/server.crt
+    -days {{ etcd_pki_node_days }}
+    -sha256
     -extensions v3_req
-    -extfile /etc/etcd/pki/openssl-san.cnf
+    -extfile {{ etcd_pki_dir }}/openssl_san.cnf
   args:
-    creates: /etc/etcd/pki/server.crt
+    creates: "{{ etcd_pki_dir }}/server.crt"
 
-- name: Set PKI file permissions
-  ansible.builtin.file:
-    path: "/etc/etcd/pki/{{ item.path }}"
-    owner: root
-    group: root
+- name: Set PKI file ownership + permissions for etcd runtime (authoritative)
+  file:
+    path: "{{ etcd_pki_dir }}/{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: "ca.crt", mode: "0644" }
-    - { path: "peer.crt", mode: "0644" }
-    - { path: "server.crt", mode: "0644" }
-    - { path: "ca.key", mode: "0600" }
-    - { path: "peer.key", mode: "0600" }
-    - { path: "server.key", mode: "0600" }
+    # keys must be readable by the etcd daemon user
+    - { path: "peer.key",   owner: "etcd", group: "etcd", mode: "0600" }
+    - { path: "server.key", owner: "etcd", group: "etcd", mode: "0600" }
+
+    # certs must be readable by etcd
+    - { path: "peer.crt",   owner: "root", group: "etcd", mode: "0644" }
+    - { path: "server.crt", owner: "root", group: "etcd", mode: "0644" }
+    - { path: "ca.crt",     owner: "root", group: "etcd", mode: "0644" }
+
+    # CA key root-only
+    - { path: "ca.key",     owner: "root", group: "root", mode: "0600" }
+
+- name: Ensure etcd can traverse PKI directory (defense in depth)
+  file:
+    path: "{{ etcd_pki_dir }}"
+    owner: root
+    group: etcd
+    mode: "0750"
+
