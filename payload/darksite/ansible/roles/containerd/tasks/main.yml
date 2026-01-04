@@ -1,30 +1,52 @@
+---
 - name: Install containerd
-  apt:
+  ansible.builtin.apt:
     name: containerd
     state: present
     update_cache: yes
+    force_apt_get: true
 
 - name: Ensure containerd config directory
-  file:
+  ansible.builtin.file:
     path: /etc/containerd
     state: directory
     mode: "0755"
 
-- name: Generate default config if missing
-  shell: "containerd config default > /etc/containerd/config.toml"
-  args:
-    creates: /etc/containerd/config.toml
+- name: Check if containerd config exists
+  ansible.builtin.stat:
+    path: /etc/containerd/config.toml
+  register: containerd_config_stat
+
+# In --check, Ansible won't actually create the file with "creates:".
+# So we generate the content and then force-write the file even in check mode.
+- name: Generate default containerd config (stdout)
+  ansible.builtin.command: containerd config default
+  register: containerd_default_config
+  when: not containerd_config_stat.stat.exists
+  changed_when: false
+
+- name: Write default containerd config if missing (force real write even in --check)
+  ansible.builtin.copy:
+    dest: /etc/containerd/config.toml
+    content: "{{ containerd_default_config.stdout }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not containerd_config_stat.stat.exists
+  check_mode: no
+  changed_when: false
   notify: restart_containerd
 
 - name: Enable SystemdCgroup
-  replace:
+  ansible.builtin.replace:
     path: /etc/containerd/config.toml
-    regexp: 'SystemdCgroup = false'
-    replace: 'SystemdCgroup = true'
+    regexp: '^\s*SystemdCgroup\s*=\s*false\s*$'
+    replace: '            SystemdCgroup = true'
   notify: restart_containerd
 
 - name: Enable and start containerd
-  service:
+  ansible.builtin.service:
     name: containerd
     enabled: true
     state: started
+
