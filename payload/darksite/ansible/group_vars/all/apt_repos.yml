@@ -1,0 +1,38 @@
+---
+# Repo catalog keyed by host class (computed in apt_repos role)
+
+# NOTE: Adjust k8s_minor_repo here once, and the repo line follows.
+k8s_minor_repo: "v1.35"
+
+apt_repos_by_class:
+  global:
+    # Salt (Broadcom)
+    - name: salt
+      enabled: true
+      key_url: "https://packages.broadcom.com/artifactory/api/security/keypair/SaltProjectKey/public"
+      keyring_path: "/etc/apt/keyrings/salt-archive-keyring.pgp"
+      key_mode: "raw"
+      sources_url: "https://github.com/saltstack/salt-install-guide/releases/latest/download/salt.sources"
+
+  kubernetes:
+    - name: kubernetes
+      enabled: true
+      key_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/Release.key"
+      keyring_path: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+      key_mode: "dearmor"
+      deb_lines:
+        - "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/ /"
+
+  monitoring:
+    - name: grafana
+      enabled: true
+      key_url: "https://apt.grafana.com/gpg.key"
+      keyring_path: "/etc/apt/keyrings/grafana.gpg"
+      key_mode: "dearmor"
+      deb_lines:
+        - "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+
+  storage: []
+  lb: []
+  etcd: []
+

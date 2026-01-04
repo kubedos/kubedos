@@ -1,12 +1,12 @@
 ---
 - name: Kubernetes repo bootstrap + version manifest (deb pins)
-  hosts: "cp:w"
+  hosts: "cp-*:w-*"
   gather_facts: false
   become: true
   any_errors_fatal: true
 
   vars:
-    # Pin the Kubernetes repo minor intentionally (do not derive from stable.txt)
+    # Pin the Kubernetes repo minor intentionally
     k8s_minor_repo: "v1.35"
 
     # Repo URL

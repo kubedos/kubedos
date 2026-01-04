@@ -1,6 +1,8 @@
 - import_playbook: playbooks/00_preflight.yml
 - import_playbook: playbooks/00_fabric_gate.yml
 
+- import_playbook: playbooks/01_apt_repos.yml
+
 - import_playbook: playbooks/01_common.yml
 - import_playbook: playbooks/02_containerd.yml
 - import_playbook: playbooks/03_k8s_packages.yml

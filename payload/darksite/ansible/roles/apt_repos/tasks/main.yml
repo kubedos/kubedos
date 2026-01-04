@@ -1,0 +1,160 @@
+---
+- name: Preflight | wait for dpkg/apt locks to clear (raw)
+  ansible.builtin.raw: |
+    set -euo pipefail
+    locks="/var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock"
+    for i in $(seq 1 180); do
+      busy=0
+      for l in $locks; do
+        if [ -e "$l" ] && fuser "$l" >/dev/null 2>&1; then busy=1; fi
+      done
+      if pgrep -x apt-get >/dev/null 2>&1 || pgrep -x apt >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1; then busy=1; fi
+      if [ "$busy" -eq 0 ]; then exit 0; fi
+      sleep 1
+    done
+    echo "apt/dpkg locks did not clear in time" >&2
+    exit 1
+  changed_when: false
+  check_mode: no
+
+- name: Ensure repo prerequisites
+  ansible.builtin.apt:
+    name: "{{ apt_repos_prereqs }}"
+    state: present
+    update_cache: true
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+- name: Classify host (hostname-driven)
+  ansible.builtin.set_fact:
+    apt_repo_classes: >-
+      {{
+        ['global']
+        + (['kubernetes'] if (inventory_hostname is match('^cp-') or inventory_hostname is match('^w-')) else [])
+        + (['monitoring'] if (inventory_hostname is match('^grafana') or inventory_hostname is match('^prometheus')) else [])
+        + (['storage'] if (inventory_hostname is match('^storage')) else [])
+        + (['lb'] if (inventory_hostname is match('^lb-')) else [])
+        + (['etcd'] if (inventory_hostname is match('^etcd-')) else [])
+      }}
+  changed_when: false
+
+- name: Build effective repo list from classes
+  ansible.builtin.set_fact:
+    apt_repos_effective: "{{ apt_repos_effective | default([]) + (apt_repos_by_class[item] | default([])) }}"
+  loop: "{{ apt_repo_classes }}"
+  changed_when: false
+
+# --- Key downloads (raw) ---
+- name: Download raw keys
+  ansible.builtin.get_url:
+    url: "{{ item.key_url }}"
+    dest: "{{ item.keyring_path }}"
+    mode: "0644"
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.key_url is defined
+    - item.keyring_path is defined
+    - (item.key_mode | default('dearmor')) == 'raw'
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+# --- Key downloads (dearmor) ---
+- name: Download asc keys for dearmor
+  ansible.builtin.get_url:
+    url: "{{ item.key_url }}"
+    dest: "/etc/apt/keyrings/{{ item.name }}.asc"
+    mode: "0644"
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.key_url is defined
+    - item.keyring_path is defined
+    - (item.key_mode | default('dearmor')) == 'dearmor'
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+- name: Dearmor keys into keyrings
+  ansible.builtin.command: >
+    gpg --batch --yes --dearmor
+    -o {{ item.keyring_path }}
+    /etc/apt/keyrings/{{ item.name }}.asc
+  args:
+    creates: "{{ item.keyring_path }}"
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.key_url is defined
+    - item.keyring_path is defined
+    - (item.key_mode | default('dearmor')) == 'dearmor'
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+# --- Repo files (.sources) ---
+- name: Install .sources from URL
+  ansible.builtin.get_url:
+    url: "{{ item.sources_url }}"
+    dest: "/etc/apt/sources.list.d/{{ item.name }}.sources"
+    mode: "0644"
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.sources_url is defined
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+# --- Repo files (.list) ---
+- name: Install .list repo files
+  ansible.builtin.copy:
+    dest: "/etc/apt/sources.list.d/{{ item.name }}.list"
+    mode: "0644"
+    content: |
+      {% for line in (item.deb_lines | default([])) %}
+      {{ line }}
+      {% endfor %}
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.sources_url is not defined
+    - (item.deb_lines | default([])) | length > 0
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+# --- Optional pins ---
+- name: Install apt pin files
+  ansible.builtin.copy:
+    dest: "{{ item.pin_path }}"
+    mode: "0644"
+    content: "{{ item.pin_content }}"
+  loop: "{{ apt_repos_effective }}"
+  when:
+    - (item.enabled | default(true) | bool)
+    - item.pin_path is defined
+    - item.pin_content is defined
+  check_mode: "{{ not apt_repos_apply_in_check }}"
+
+# --- Health gate ---
+- name: Apt update (repo health gate; captures real failures)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt-get update 2>&1 | tee "{{ apt_repos_update_log }}"
+  args:
+    executable: /bin/bash
+  register: apt_repos_update
+  changed_when: false
+  check_mode: no
+
+- name: Fail if apt update indicates repo trust/DNS/TLS failure
+  ansible.builtin.fail:
+    msg: |
+      Repo layer is not healthy on {{ inventory_hostname }}.
+      Log: {{ apt_repos_update_log }}
+
+      Filtered apt-get update output:
+      {{ (apt_repos_update.stdout_lines
+          | select('match', '.*(' ~ (apt_repos_fail_patterns | map('regex_escape') | join('|')) ~ ').*')
+          | list) | join('\n') }}
+  when: >
+    apt_repos_fail_patterns | select('in', apt_repos_update.stdout) | list | length > 0
+

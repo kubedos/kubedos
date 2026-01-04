@@ -1,0 +1,24 @@
+---
+apt_repos_apply_in_check: true
+
+apt_repos_prereqs:
+  - ca-certificates
+  - curl
+  - gnupg
+  - apt-transport-https
+
+apt_repos_update_log: "/tmp/apt-update.repos.log"
+
+apt_repos_fail_patterns:
+  - "NO_PUBKEY"
+  - "EXPKEYSIG"
+  - "signatures were invalid"
+  - "is not signed"
+  - "Could not resolve"
+  - "Temporary failure resolving"
+  - "TLS"
+  - "Handshake"
+
+# Repo catalog: define in group_vars/all/apt_repos.yml
+apt_repos_by_class: {}
+
