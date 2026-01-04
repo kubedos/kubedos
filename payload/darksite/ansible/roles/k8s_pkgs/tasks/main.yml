@@ -8,13 +8,14 @@
 - name: Set fact-host (single source of truth host for run_once facts)
   ansible.builtin.set_fact:
     k8s_fact_host: "{{ ansible_play_hosts_all[0] }}"
+  run_once: true
 
 - name: Require k8s_node_ip to be set (deterministic node identity)
   ansible.builtin.assert:
     that:
       - (k8s_node_ip | default('') | trim) != ""
     fail_msg: >-
-      k8s_node_ip is required but empty. Set per-host k8s_node_ip in inventory/group_vars/host_vars
+      k8s_node_ip is required but empty. Set per-host k8s_node_ip in inventory/host_vars/
       (ideally bound to your intended plane IP, e.g. wg3).
 
 - name: Ensure required variables have sane defaults
@@ -81,22 +82,36 @@
         )
       }}
 
-    # Minor repo selector like v1.30 (used by pkgs.k8s.io path)
+    # Minor repo selector like v1.30 (pkgs.k8s.io expects MINOR, not patch)
     k8s_minor_repo_resolved: >-
       {{
-        (
-          (k8s_minor_repo | default('') | trim)
-          if ((k8s_minor_repo | default('') | trim) | length > 0)
-          else
+        (k8s_minor_repo | default('') | trim)
+        if ((k8s_minor_repo | default('') | trim) | length > 0)
+        else
+          (
+            'v' ~
             (
               (
-                (k8s_stable_txt.get('content','') | trim)
-                if (k8s_version_auto | default(true) | bool)
-                else (k8s_full_version | default('') | trim)
-              )
-              | regex_replace('^v?(\\d+\\.\\d+)\\..*$', 'v\\1')
+                (
+                  (k8s_stable_txt.get('content','') | trim)
+                  if (k8s_version_auto | default(true) | bool)
+                  else (k8s_full_version | default('') | trim)
+                )
+                | regex_replace('^v', '')
+              ).split('.')[0]
             )
-        )
+            ~ '.' ~
+            (
+              (
+                (
+                  (k8s_stable_txt.get('content','') | trim)
+                  if (k8s_version_auto | default(true) | bool)
+                  else (k8s_full_version | default('') | trim)
+                )
+                | regex_replace('^v', '')
+              ).split('.')[1]
+            )
+          )
       }}
   run_once: true
   delegate_to: "{{ k8s_fact_host }}"
@@ -149,6 +164,7 @@
 
 # ------------------------
 # Resolve exact package versions available in apt
+# NOTE: these MUST run in --check, so force check_mode: no
 # ------------------------
 - name: Query apt for kubelet version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
   ansible.builtin.shell: |
@@ -158,6 +174,7 @@
     executable: /bin/bash
   register: kubelet_pkgver
   changed_when: false
+  check_mode: no
 
 - name: Query apt for kubeadm version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
   ansible.builtin.shell: |
@@ -167,6 +184,7 @@
     executable: /bin/bash
   register: kubeadm_pkgver
   changed_when: false
+  check_mode: no
 
 - name: Query apt for kubectl version matching {{ hostvars[k8s_fact_host]['k8s_semver_resolved'] }}
   ansible.builtin.shell: |
@@ -176,13 +194,14 @@
     executable: /bin/bash
   register: kubectl_pkgver
   changed_when: false
+  check_mode: no
 
 - name: Fail if requested Kubernetes version is not present in the repo
   ansible.builtin.fail:
     msg: >-
       Kubernetes {{ hostvars[k8s_fact_host]['k8s_full_version_resolved'] }} not available in apt repo
       https://pkgs.k8s.io/core:/stable:/{{ hostvars[k8s_fact_host]['k8s_minor_repo_resolved'] }}/deb/.
-      Check network access/mirror, or override k8s_release_channel_url / k8s_full_version / k8s_minor_repo.
+      If the repo exists but you need a different channel, override k8s_minor_repo (e.g. v1.34).
   when: >
     (kubelet_pkgver.stdout | default('') | trim == "")
     or (kubeadm_pkgver.stdout | default('') | trim == "")
@@ -199,6 +218,7 @@
     executable: /bin/bash
   register: kubelet_installed
   changed_when: false
+  check_mode: no
 
 - name: Install Kubernetes packages (exact version)
   ansible.builtin.apt:
@@ -227,5 +247,4 @@
     content: |
       KUBELET_EXTRA_ARGS=--node-ip={{ k8s_node_ip_effective }}
   notify: restart kubelet
-
 
