@@ -1,19 +1,30 @@
 ---
-- name: Kubernetes repo bootstrap + version manifest
+- name: Kubernetes repo bootstrap + version manifest (deb pins)
   hosts: "cp:w"
   gather_facts: false
   become: true
   any_errors_fatal: true
 
   vars:
-    # Pin the repo minor you want:
+    # Pin the Kubernetes repo minor intentionally (do not derive from stable.txt)
     k8s_minor_repo: "v1.35"
+
+    # Repo URL
+    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
 
     # Where to write the pinned versions (on controller)
     manifest_path: "/srv/ansible/group_vars/all/k8s_versions.yml"
 
-    # Repo URL
-    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo }}/deb/"
+    # Patterns that indicate apt repo trust/DNS/TLS failures
+    fail_patterns:
+      - "NO_PUBKEY"
+      - "EXPKEYSIG"
+      - "signatures were invalid"
+      - "is not signed"
+      - "Could not resolve"
+      - "Temporary failure resolving"
+      - "TLS"
+      - "Handshake"
 
   tasks:
     - name: Ensure baseline tooling for repo bootstrap
@@ -22,6 +33,7 @@
           - ca-certificates
           - curl
           - gnupg
+          - apt-transport-https
         state: present
         update_cache: true
       check_mode: no
@@ -57,7 +69,7 @@
           deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ k8s_repo_url }} /
       check_mode: no
 
-    - name: Apt update (capture errors)
+    - name: Apt update (capture output)
       ansible.builtin.shell: |
         set -euo pipefail
         apt-get update 2>&1 | tee /tmp/apt-update.k8s.log
@@ -67,7 +79,7 @@
       changed_when: false
       check_mode: no
 
-    - name: Fail loudly if repo is not usable (trust/DNS/TLS)
+    - name: Fail loudly if Kubernetes repo is not usable (trust/DNS/TLS)
       ansible.builtin.fail:
         msg: |
           Kubernetes apt repo is not usable on {{ inventory_hostname }}.
@@ -75,81 +87,57 @@
 
           Filtered apt-get update output:
           {{ (apt_update_out.stdout_lines
-              | select('match', '.*(pkgs\\.k8s\\.io|EXPKEYSIG|NO_PUBKEY|not signed|signatures were invalid|Could not resolve|TLS|Handshake).*')
+              | select('match', '.*(pkgs\\.k8s\\.io|NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|Temporary failure resolving|TLS|Handshake).*')
               | list) | join('\n') }}
 
-          Full log: /tmp/apt-update.k8s.log
+          Full log on node: /tmp/apt-update.k8s.log
       when: >
-        (apt_update_out.stdout is search('EXPKEYSIG'))
-        or (apt_update_out.stdout is search('NO_PUBKEY'))
-        or (apt_update_out.stdout is search('not signed'))
-        or (apt_update_out.stdout is search('signatures were invalid'))
-        or (apt_update_out.stdout is search('Could not resolve'))
-        or (apt_update_out.stdout is search('TLS'))
-        or (apt_update_out.stdout is search('Handshake'))
+        (fail_patterns | select('in', apt_update_out.stdout) | list | length) > 0
 
-    - name: Show available versions (madison)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        echo "== kubelet =="
-        apt-cache madison kubelet || true
-        echo
-        echo "== kubeadm =="
-        apt-cache madison kubeadm || true
-        echo
-        echo "== kubectl =="
-        apt-cache madison kubectl || true
-      args:
-        executable: /bin/bash
-      register: madison
-      changed_when: false
-      check_mode: no
-      run_once: true
-
-    - name: Pick newest deb versions for kubelet/kubeadm/kubectl
+    - name: Resolve newest deb versions from apt (run once)
       ansible.builtin.shell: |
         set -euo pipefail
         pick() {
           local p="$1"
           apt-cache madison "$p" | awk '{print $3}' | LC_ALL=C sort -Vu | tail -n1
         }
-        kubelet="$(pick kubelet)"
-        kubeadm="$(pick kubeadm)"
-        kubectl="$(pick kubectl)"
+        kubelet="$(pick kubelet || true)"
+        kubeadm="$(pick kubeadm || true)"
+        kubectl="$(pick kubectl || true)"
 
         if [ -z "${kubelet}" ] || [ -z "${kubeadm}" ] || [ -z "${kubectl}" ]; then
-          echo "ERROR: one or more packages not present in apt (repo not providing them)"
+          echo "ERROR: one or more packages not present in apt."
+          echo "kubelet='${kubelet}' kubeadm='${kubeadm}' kubectl='${kubectl}'"
           exit 1
         fi
 
-        semver="${kubelet%%-*}"
-
-        cat <<EOF
-k8s_minor_repo: "{{ k8s_minor_repo }}"
-k8s_repo_url: "{{ k8s_repo_url }}"
-
-k8s_deb_versions:
-  kubelet: "${kubelet}"
-  kubeadm: "${kubeadm}"
-  kubectl: "${kubectl}"
-
-# Derived from kubelet deb version (strip deb revision)
-k8s_semver_pinned: "${semver}"
-EOF
+        echo "kubelet=${kubelet}"
+        echo "kubeadm=${kubeadm}"
+        echo "kubectl=${kubectl}"
+        echo "semver=${kubelet%%-*}"
       args:
         executable: /bin/bash
-      register: picked
+      register: picks
       changed_when: false
       check_mode: no
       run_once: true
 
-    - name: Print picks
+    - name: Set manifest facts (run once)
+      ansible.builtin.set_fact:
+        k8s_deb_kubelet: "{{ (picks.stdout_lines | select('match','^kubelet=') | list | first) | regex_replace('^kubelet=','') }}"
+        k8s_deb_kubeadm: "{{ (picks.stdout_lines | select('match','^kubeadm=') | list | first) | regex_replace('^kubeadm=','') }}"
+        k8s_deb_kubectl: "{{ (picks.stdout_lines | select('match','^kubectl=') | list | first) | regex_replace('^kubectl=','') }}"
+        k8s_semver_pinned: "{{ (picks.stdout_lines | select('match','^semver=') | list | first) | regex_replace('^semver=','') }}"
+      run_once: true
+
+    - name: Print picked versions
       ansible.builtin.debug:
         msg:
-          - "MADISON (top):"
-          - "{{ madison.stdout.split('\n') }}"
-          - "PICKED:"
-          - "{{ picked.stdout.split('\n') }}"
+          - "Repo: {{ k8s_repo_url }}"
+          - "kubelet: {{ k8s_deb_kubelet }}"
+          - "kubeadm: {{ k8s_deb_kubeadm }}"
+          - "kubectl: {{ k8s_deb_kubectl }}"
+          - "semver:  {{ k8s_semver_pinned }}"
       run_once: true
 
     - name: Write manifest on controller (commit this)
@@ -158,7 +146,15 @@ EOF
         mode: "0644"
         content: |
           # Generated from apt repo on {{ ansible_date_time.date }} {{ ansible_date_time.time }}
-          {{ picked.stdout }}
+          k8s_minor_repo: "{{ k8s_minor_repo }}"
+          k8s_repo_url: "{{ k8s_repo_url }}"
+
+          k8s_deb_versions:
+            kubelet: "{{ k8s_deb_kubelet }}"
+            kubeadm: "{{ k8s_deb_kubeadm }}"
+            kubectl: "{{ k8s_deb_kubectl }}"
+
+          k8s_semver_pinned: "{{ k8s_semver_pinned }}"
       delegate_to: localhost
       become: false
       run_once: true
