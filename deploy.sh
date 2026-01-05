@@ -2609,7 +2609,7 @@ fb_banner() {
     888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
   '"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
      ""    ""                      "`         "YP'        "" os
-      secure · "borg-like" · platfourms -> everywhere
+                secure · platfourms -> everywhere
 
 FBBANNER
 }
@@ -3900,25 +3900,24 @@ PS1='\u@\h:\w\$ '
 fb_banner() {
   cat << 'FBBANNER'
 
-        ..                           ..                  ..
-  < .z@8"`                     . uW8"                  dF
-   !@88E           x.    .     `t888                  '88bu.
-   '888E   u     .@88k  z88u    8888   .        .u    '*88888bu
-    888E u@8NL  ~"8888 ^8888    9888.z88N    ud8888.    ^"*8888N
-    888E`"88*"    8888  888R    9888  888E :888'8888.  beWE "888L
-    888E .dN.     8888  888R    9888  888E d888 '88%"  888E  888E
-    888E~8888     8888  888R    9888  888E 8888.+"     888E  888E
-    888E '888&    8888 ,888B .  9888  888E 8888L       888E  888F
-    888E  9888.  "8888Y 8888"  .8888  888" '8888c. .+ .888N..888
-  '"888*" 4888"   `Y"   'YP     `%888*%"    "88888%    `"888*""
-     ""    ""                      "`         "YP'        "" os
-      secure · "borg-like" · platfourms -> everywhere
+     _____
+    < Moo?>
+     -----
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+  Role      : Kubernetes platform cattle node
+  Directive : "If it breaks, replace it."
+  Status    : ready to be re-provisioned
 
 FBBANNER
 }
 
 # Only show once per interactive session
-if [ -z "$FBNOBANNER" ]; then
+if [ -z "${FBNOBANNER:-}" ]; then
   fb_banner
   export FBNOBANNER=1
 fi
