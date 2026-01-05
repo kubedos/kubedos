@@ -3,5 +3,7 @@
 hosts_file_manage_controller: true
 
 # Which hostvar IP to write into /etc/hosts mappings.
-# Default: management IP used by Ansible connectivity.
-hosts_file_ip_var: ansible_host
+# We want ALL name-based access (humans + cluster components) to prefer underlay (10.100).
+# Ansible connectivity still uses ansible_host (10.78) from inventory.
+hosts_file_ip_var: underlay_ip
+
