@@ -1,0 +1,38 @@
+---
+- name: Seed controller known_hosts for cluster nodes (optional)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    known_hosts_path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
+
+  tasks:
+    - name: Ensure ~/.ssh exists
+      ansible.builtin.file:
+        path: "{{ lookup('env','HOME') }}/.ssh"
+        state: directory
+        mode: "0700"
+
+    - name: Build list of hostnames to scan (inventory hostnames)
+      ansible.builtin.set_fact:
+        seed_hosts: "{{ groups['all'] | difference(['localhost']) | sort }}"
+
+    - name: Scan and add host keys (ed25519 preferred)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ssh-keyscan -T 5 -t ed25519 {{ item }} 2>/dev/null
+      args:
+        executable: /bin/bash
+      loop: "{{ seed_hosts }}"
+      register: scanned
+      changed_when: false
+
+    - name: Add keys to known_hosts (hashed)
+      ansible.builtin.known_hosts:
+        path: "{{ known_hosts_path }}"
+        name: "{{ item.item }}"
+        key: "{{ (item.stdout | trim) }}"
+        hash_host: true
+        state: present
+      loop: "{{ scanned.results }}"
+      when: item.stdout is defined and (item.stdout | trim) != ""
