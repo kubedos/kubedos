@@ -1,6 +1,6 @@
 # KubeDOS (foundryBot) — Build Once, Deploy Everywhere
 
-> **A single-step installer that treats the OS like a Kubernetes workload.**  
+> **A single-step installer that treats the OS like a Kubernetes workload.**
 > Build immutable infrastructure, deploy it anywhere, and rebuild the entire world on demand.
 
 KubeDOS exists to "deliver" "platfourms" as "cattle" anywhere, it also includes basic security and quality of life "tools" as "defaults"
