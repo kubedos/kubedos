@@ -1,300 +1,38 @@
 ---
-- name: Kubernetes repo bootstrap + version manifest (deb pins)
-  hosts: "cp:w"
-  become: true
+- name: Seed controller known_hosts for cluster nodes (optional)
+  hosts: localhost
   gather_facts: false
 
   vars:
-    # DO NOT self-reference. Use *_effective vars only.
-    k8s_minor_repo_effective: >-
-      {{
-        (k8s_minor_repo is defined)
-        | ternary(
-            k8s_minor_repo,
-            'v1.35'
-          )
-      }}
-
-    k8s_repo_url_effective: >-
-      {{
-        (k8s_repo_url is defined)
-        | ternary(
-            k8s_repo_url,
-            'https://pkgs.k8s.io/core:/stable:/' ~ k8s_minor_repo_effective ~ '/deb/'
-          )
-      }}
-
-    manifest_path_effective: >-
-      {{
-        (manifest_path is defined)
-        | ternary(
-            manifest_path,
-            '/srv/ansible/group_vars/all/k8s_versions.yml'
-          )
-      }}
-
-    k8s_key_tmp: /tmp/kubernetes-Release.key
-    k8s_keyring: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    k8s_list: /etc/apt/sources.list.d/kubernetes.list
+    known_hosts_path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
 
   tasks:
-    - name: Ensure baseline tooling for repo bootstrap
-      ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
-          - gnupg
-        state: present
-        update_cache: true
-      check_mode: no
-
-    - name: Ensure apt keyrings directory exists
+    - name: Ensure ~/.ssh exists
       ansible.builtin.file:
-        path: /etc/apt/keyrings
+        path: "{{ lookup('env','HOME') }}/.ssh"
         state: directory
-        mode: "0755"
+        mode: "0700"
 
-    - name: Fetch Kubernetes repo Release.key
-      ansible.builtin.get_url:
-        url: "{{ k8s_repo_url_effective }}Release.key"
-        dest: "{{ k8s_key_tmp }}"
-        mode: "0644"
-        force: true
-      check_mode: no
+    - name: Build list of hostnames to scan (inventory hostnames)
+      ansible.builtin.set_fact:
+        seed_hosts: "{{ groups['all'] | difference(['localhost']) | sort }}"
 
-    - name: Dearmor Kubernetes key into keyring
-      ansible.builtin.command: >
-        bash -lc "gpg --dearmor -o {{ k8s_keyring }} {{ k8s_key_tmp }} && chmod 0644 {{ k8s_keyring }}"
-      changed_when: true
-      check_mode: no
-
-    - name: Install Kubernetes apt source list
-      ansible.builtin.copy:
-        dest: "{{ k8s_list }}"
-        mode: "0644"
-        content: |
-          deb [signed-by={{ k8s_keyring }}] {{ k8s_repo_url_effective }} /
-      check_mode: no
-
-    - name: Apt update (capture output)
-      ansible.builtin.command: bash -lc "apt-get update"
-      register: _apt_update
-      changed_when: false
-      check_mode: no
-
-    - name: Fail loudly if Kubernetes repo is not usable (trust/DNS/TLS)
-      ansible.builtin.fail:
-        msg: |
-          Kubernetes repo not usable on {{ inventory_hostname }}.
-          Repo: {{ k8s_repo_url_effective }}
-          apt-get update output:
-          {{ _apt_update.stdout | default('') }}
-          {{ _apt_update.stderr | default('') }}
-      when: >
-        (_apt_update.stdout is search('NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake', ignorecase=True))
-        or
-        (_apt_update.stderr is search('NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake', ignorecase=True))
-
-    # Resolve versions from ONE cp host (run once) and write manifest locally on controller.
-    - name: Resolve newest deb versions from apt (run once)
+    - name: Scan and add host keys (ed25519 preferred)
       ansible.builtin.shell: |
         set -euo pipefail
-        kubelet="$(apt-cache madison kubelet | awk '{print $3}' | head -n1)"
-        kubeadm="$(apt-cache madison kubeadm | awk '{print $3}' | head -n1)"
-        kubectl="$(apt-cache madison kubectl | awk '{print $3}' | head -n1)"
-        echo "kubelet=${kubelet}"
-        echo "kubeadm=${kubeadm}"
-        echo "kubectl=${kubectl}"
+        ssh-keyscan -T 5 -t ed25519 {{ item }} 2>/dev/null
       args:
         executable: /bin/bash
-      register: _deb_versions
-      run_once: true
-      delegate_to: "{{ groups['cp'][0] }}"
+      loop: "{{ seed_hosts }}"
+      register: scanned
       changed_when: false
-      check_mode: no
 
-    - name: Set manifest facts (run once)
-      ansible.builtin.set_fact:
-        _kubelet_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubelet=') | first).split('=',1)[1] }}"
-        _kubeadm_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubeadm=') | first).split('=',1)[1] }}"
-        _kubectl_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubectl=') | first).split('=',1)[1] }}"
-        _k8s_semver: "{{ (_deb_versions.stdout_lines | select('match','^kubelet=') | first).split('=',1)[1].split('-',1)[0] }}"
-        _ts: "{{ lookup('pipe', 'date -Is') }}"
-      run_once: true
-
-    - name: Print picked versions (run once)
-      ansible.builtin.debug:
-        msg:
-          - "Repo:    {{ k8s_repo_url_effective }}"
-          - "kubelet: {{ _kubelet_ver }}"
-          - "kubeadm: {{ _kubeadm_ver }}"
-          - "kubectl: {{ _kubectl_ver }}"
-          - "semver:  {{ _k8s_semver }}"
-          - "write:   {{ manifest_path_effective }}"
-      run_once: true
-
-    - name: Write manifest on controller (commit this)
-      ansible.builtin.copy:
-        dest: "{{ manifest_path_effective }}"
-        mode: "0644"
-        content: |
-          ---
-          # Generated {{ _ts }}
-          # Source: {{ k8s_repo_url_effective }}
-          #
-          # Re-generate:
-          #   ansible-playbook -i inventory/hosts.ini tools/k8s_repo_manifest.yml --become
-          #
-          # Deterministic pins for Kubernetes deb installs.
-
-          k8s_minor_repo: "{{ k8s_minor_repo_effective }}"
-          k8s_repo_url: "{{ k8s_repo_url_effective }}"
-
-          k8s_deb_versions:
-            kubelet: "{{ _kubelet_ver }}"
-            kubeadm: "{{ _kubeadm_ver }}"
-            kubectl: "{{ _kubectl_ver }}"
-
-          k8s_semver_pinned: "{{ _k8s_semver }}"
-      delegate_to: localhost
-      run_once: true
----
-- name: Kubernetes repo bootstrap + version manifest (deb pins)
-  hosts: "cp:w"
-  become: true
-  gather_facts: false
-
-  vars:
-    # Pin the Kubernetes repo minor intentionally.
-    # Override at runtime if needed, e.g.:
-    #   ansible-playbook ... -e k8s_minor_repo=v1.34
-    k8s_minor_repo_effective: "{{ (k8s_minor_repo is defined) | ternary(k8s_minor_repo, 'v1.35') }}"
-    k8s_repo_url_effective: "https://pkgs.k8s.io/core:/stable:/{{ k8s_minor_repo_effective }}/deb/"
-
-    # Where to write the pinned versions on the controller
-    manifest_path_effective: "{{ (manifest_path is defined) | ternary(manifest_path, '/srv/ansible/group_vars/all/k8s_versions.yml') }}"
-
-    keyring_dir: /etc/apt/keyrings
-    keyring_asc: "{{ keyring_dir }}/kubernetes-apt-keyring.asc"
-    keyring_gpg: "{{ keyring_dir }}/kubernetes-apt-keyring.gpg"
-    repo_list_path: /etc/apt/sources.list.d/kubernetes.list
-
-  tasks:
-    - name: Ensure baseline tooling for repo bootstrap
-      ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
-          - gnupg
+    - name: Add keys to known_hosts (hashed)
+      ansible.builtin.known_hosts:
+        path: "{{ known_hosts_path }}"
+        name: "{{ item.item }}"
+        key: "{{ (item.stdout | trim) }}"
+        hash_host: true
         state: present
-        update_cache: false
-      check_mode: no
-
-    - name: Ensure apt keyrings directory exists
-      ansible.builtin.file:
-        path: "{{ keyring_dir }}"
-        state: directory
-        mode: "0755"
-      check_mode: no
-
-    - name: Fetch Kubernetes repo Release.key
-      ansible.builtin.get_url:
-        url: "{{ k8s_repo_url_effective }}Release.key"
-        dest: "{{ keyring_asc }}"
-        mode: "0644"
-        force: true
-      check_mode: no
-
-    - name: Dearmor Kubernetes key into keyring
-      ansible.builtin.command: >
-        gpg --dearmor --yes --output {{ keyring_gpg }} {{ keyring_asc }}
-      args:
-        creates: "{{ keyring_gpg }}"
-      register: dearmor_result
-      changed_when: dearmor_result.rc == 0
-      check_mode: no
-
-    - name: Install Kubernetes apt source list
-      ansible.builtin.copy:
-        dest: "{{ repo_list_path }}"
-        mode: "0644"
-        content: |
-          deb [signed-by={{ keyring_gpg }}] {{ k8s_repo_url_effective }} /
-      check_mode: no
-
-    - name: Apt update (capture output)
-      ansible.builtin.command: apt-get update
-      register: apt_update
-      changed_when: false
-      check_mode: no
-
-    - name: Fail loudly if Kubernetes repo is not usable (trust/DNS/TLS)
-      ansible.builtin.fail:
-        msg: |
-          Kubernetes repo not usable.
-          Repo: {{ k8s_repo_url_effective }}
-
-          apt-get update output:
-          {{ apt_update.stdout | default('') }}
-          {{ apt_update.stderr | default('') }}
-      when: >
-        (apt_update.stdout is search("NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake|Certificate", ignorecase=True))
-        or
-        (apt_update.stderr is search("NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake|Certificate", ignorecase=True))
-
-    - name: Resolve newest deb versions from apt (run once)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        apt-cache madison kubelet kubeadm kubectl | awk '{print $1"="$3}' | head -n 50
-      register: madison
-      changed_when: false
-      run_once: true
-      check_mode: no
-
-    - name: Set manifest facts (run once)
-      ansible.builtin.set_fact:
-        k8s_deb_versions_effective:
-          kubelet: "{{ (madison.stdout_lines | select('match','^kubelet=') | map('regex_replace','^kubelet=','') | list | first) }}"
-          kubeadm: "{{ (madison.stdout_lines | select('match','^kubeadm=') | map('regex_replace','^kubeadm=','') | list | first) }}"
-          kubectl: "{{ (madison.stdout_lines | select('match','^kubectl=') | map('regex_replace','^kubectl=','') | list | first) }}"
-        k8s_semver_effective: "{{ (madison.stdout_lines | select('match','^kubelet=') | map('regex_replace','^kubelet=','') | list | first).split('-')[0] }}"
-      run_once: true
-
-    - name: Print picked versions (run once)
-      ansible.builtin.debug:
-        msg:
-          - "Repo:    {{ k8s_repo_url_effective }}"
-          - "kubelet: {{ k8s_deb_versions_effective.kubelet }}"
-          - "kubeadm: {{ k8s_deb_versions_effective.kubeadm }}"
-          - "kubectl: {{ k8s_deb_versions_effective.kubectl }}"
-          - "semver:  {{ k8s_semver_effective }}"
-          - "write:   {{ manifest_path_effective }}"
-      run_once: true
-
-    - name: Write manifest on controller (commit this)
-      ansible.builtin.copy:
-        dest: "{{ manifest_path_effective }}"
-        mode: "0644"
-        content: |
-          ---
-          # Generated {{ lookup('pipe','date -Iseconds') }}
-          # Source: {{ k8s_repo_url_effective }}
-          #
-          # Re-generate:
-          #   ansible-playbook -i inventory/hosts.ini tools/k8s_repo_manifest.yml --become
-          #
-          # Deterministic pins for Kubernetes deb installs.
-
-          k8s_minor_repo: "{{ k8s_minor_repo_effective }}"
-          k8s_repo_url: "{{ k8s_repo_url_effective }}"
-
-          k8s_deb_versions:
-            kubelet: "{{ k8s_deb_versions_effective.kubelet }}"
-            kubeadm: "{{ k8s_deb_versions_effective.kubeadm }}"
-            kubectl: "{{ k8s_deb_versions_effective.kubectl }}"
-
-          k8s_semver_pinned: "{{ k8s_semver_effective }}"
-      delegate_to: localhost
-      run_once: true
-      become: false
-
+      loop: "{{ scanned.results }}"
+      when: item.stdout is defined and (item.stdout | trim) != ""
