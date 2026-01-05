@@ -4,7 +4,7 @@
   gather_facts: true
 
   tasks:
-    - name: Generate etcd PKI via etcd_cluster role (tasks_from: pki)
+    - name: "Generate etcd PKI via etcd_cluster role (tasks_from=pki)"
       ansible.builtin.include_role:
         name: etcd_cluster
         tasks_from: pki
