@@ -1,4 +1,4 @@
-# KubeDOS (foundryBot) — Build Once, Deploy Everywhere
+# Kubedos — Build Once, Deploy Everywhere
 
 > **A single-step installer that treats the OS like a Kubernetes workload.**
 > Build immutable infrastructure, deploy it anywhere, and rebuild the entire world on demand.
