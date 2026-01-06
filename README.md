@@ -141,6 +141,7 @@ Best for:
 - regulated environments
 - disconnected sites
 - “the internet is not allowed” realities
+- "using cloud providers as bare metal hosts"
 
 ### 3) Both (hybrid)
 Build artifacts that can operate offline but still allow connected mirrors when present.
@@ -163,7 +164,7 @@ Build artifacts that can operate offline but still allow connected mirrors when 
 This is the “linkage” that matters:
 
 - **Connected** = smaller artifacts + dependency on mirrors
-- **Darksite** = larger artifacts + independence + deterministic installs
+- **Darksite** = larger artifacts + independence + deterministic installs + artifacts are included in the image
 - **Both** = portable artifacts that survive hostile networks
 
 ---
@@ -192,14 +193,7 @@ Use KubeDOS to produce artifacts, then deploy them with:
 This is the “I already have an IaC universe” path.
 
 **Key point:** even if *you* place the VMs, the nodes boot with convergence payloads already inside the OS artifact.
+Simply build with KubeDOS, deploy with your tools, then let the platform converge itself.
 
 ---
-
-## Examples: integrating with other IaC tools (real patterns)
-
-### Example 1 — Use KubeDOS to emit a Packer scaffold
-KubeDOS includes a mode to generate a Packer QEMU template:
-
-```bash
-TARGET=packer-scaffold ./deploy.sh
 
