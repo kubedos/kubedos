@@ -682,3 +682,244 @@ spec:
       - name: delete-control-plane
         expectRecoveryMinutes: 20
 
+### 15.3 Mandatory Validation Constraints
+
+A ClusterSpec is invalid unless:
+
+- **HA control-plane replicas** are **odd** and **≥ 3** (when HA is enabled)
+- **Plane CIDRs** do **not overlap**
+- **Default inter-plane policy** is defined (**deny recommended**)
+- **All destructive flags** are **explicit** (no implicit `true`)
+- **Bridge/VLAN trunks** are consistent with **NIC VLAN assignments**
+- If **Ceph** is enabled, **node count + failure domains** satisfy the **replication policy**
+
+---
+
+## 16. Outputs (Rebuild Anchors)
+
+A successful run **MUST** emit artifacts that make the system **rebuildable** and **auditable** without internet.
+
+### 16.1 Required Outputs
+
+- **Artifact Manifest**
+  - versions, hashes, target matrix, embedded payload versions (resolved locks)
+
+- **SBOM**
+  - OS packages + container images + shipped binaries
+
+- **Provenance Record**
+  - git commit, lockfile hashes, toolchain versions, build host policy
+
+- **Recovery Bundle**
+  - rendered ClusterSpec, manifests, SBOM, provenance, signatures, runbooks, acceptance report
+
+- **Acceptance Report**
+  - pass/fail per gate + captured evidence
+
+### 16.2 Output Directory Contract (Illustrative)
+
+```text
+out/
+  artifacts/
+    kubedos-0.1.0-proxmox-qcow2-<hash>.img
+    kubedos-0.1.0-baremetal-iso-<hash>.iso
+  manifests/
+    artifact-manifest.json
+    locks.json
+  sbom/
+    os.spdx.json
+    images.spdx.json
+  provenance/
+    build.json
+    inputs.json
+  signatures/
+    manifests.sig
+    artifacts.sig
+  recovery-bundle/
+    clusterspec.rendered.yaml
+    runbooks.md
+    acceptance-report.json
+
+    ## 17. Acceptance Criteria (Definition of Done)
+
+A build is **DONE** only if acceptance gates pass and results are recorded.
+
+---
+
+### 17.1 Mandatory Gates
+
+#### Gate: Backplane Matrix
+- Every node **MUST** be reachable over **wg1**
+- If **wg2** is enabled, observability endpoints **MUST** be reachable over **wg2**
+- **wg3** **MUST** provide required Kubernetes backend connectivity
+
+#### Gate: Security Baseline
+- SSH password auth disabled
+- allowed users enforced
+- firewall default deny on non-plane interfaces
+- enrollment gating enforced (no anonymous joins)
+
+#### Gate: Kubernetes Health (if enabled)
+- kube-apiserver reachable via intended plane
+- etcd quorum healthy (or external etcd reachable)
+- workers Ready
+
+#### Gate: Cilium + Hubble (if enabled)
+- cilium healthy on all nodes
+- hubble healthy
+- a test flow is observed and recorded
+
+#### Gate: Observability Stack (if enabled)
+- Prometheus targets present (minimum: platform + k8s core)
+- Grafana reachable on declared plane
+- Loki sanity checks pass (ingest + query)
+
+### 17.2 Drills (CI Mandatory; Prod Scheduled)
+- **delete-worker:** destroy a worker node; replacement converges within RTO
+- **delete-control-plane:** destroy a control-plane node; quorum holds; replacement converges within RTO
+
+Reports **MUST** record timestamps, recovery time, and any manual intervention (ideally zero).
+
+---
+
+## 18. Operational Runbooks (Replace, Don’t Repair)
+
+### 18.1 Total Loss (Substrate Gone)
+- Retrieve last known-good artifact + recovery bundle (offline)
+- Provision substrate from IaC
+- Boot targets
+- Enrollment/discovery under gating policy
+- Converge platform (Ansible)
+- Bring up workloads (Kubernetes reference)
+- Restore state as declared (etcd snapshots, storage recovery as applicable)
+- Run acceptance suite; archive report
+
+### 18.2 Compromised Node
+- Fence node (deny scheduling + remove from plane trust)
+- Revoke node identity + WireGuard keys
+- Drain workloads if possible
+- Destroy node
+- Provision replacement from artifact
+- Rotate impacted credentials (scope depends on compromise boundary)
+- Run acceptance suite; archive report
+
+### 18.3 Rotation Procedures (Mandatory)
+
+Rotation **MUST** be schedulable, recorded, and bounded in blast radius.
+
+Minimum rotations:
+- WireGuard keys per `security.rotation.wireguardDays`
+- node certs per `nodeCertDays`
+- Kubernetes PKI per `kubeCertDays` (or topology-defined policy)
+
+Rotation runs **MUST**:
+- preserve plane connectivity via staged rollout
+- avoid full-cluster outage unless explicitly planned
+- emit a new acceptance report
+
+### 18.4 Upgrade Strategy (Platform + Workloads)
+
+Upgrades **MUST** be treated as manufacturing events:
+- produce a new artifact with new locks
+- validate in staging
+- run drills
+- roll out using declared strategy:
+  - rolling replace
+  - surge replace
+  - blue/green cluster swap (preferred when feasible)
+
+---
+
+## 19. Documentation and Code Standards (Ultra-High Bar)
+
+### 19.1 Implementation Quality
+- idempotent by default
+- deterministic ordering (DAG enforced)
+- no hidden imperative steps
+- no silent fallbacks for security/network/storage
+
+### 19.2 Shell and Systems Code
+- `set -euo pipefail`
+- shellcheck-clean
+- structured logs (machine-readable)
+- explicit error classes and consistent exit codes
+
+### 19.3 Ansible Standards
+- modular roles; single-purpose
+- each role documents:
+  - inputs/outputs
+  - re-run behavior
+  - destructive boundaries (off by default)
+- avoid `shell:`; if necessary, guard for idempotency and capture outputs
+
+### 19.4 Salt Standards
+- bootstrap/discovery only (no endless config sprawl)
+- enrollment gated + identity-bound
+- pillar/state schema validation where feasible
+
+### 19.5 Documentation Standards
+
+Docs **MUST** include:
+- architecture + DAG
+- threat model + trust bootstrap + rotation + revocation
+- target bootstrap contract
+- failure domain assumptions
+- acceptance gates and how to reproduce
+- runbooks for loss/compromise/rotation/upgrade
+
+---
+
+## 20. Glossary
+
+- **Artifact:** bootable platform output for a target.
+- **Recovery Bundle:** offline rebuild anchor with ClusterSpec, manifests, SBOM, provenance, signatures, runbooks, and acceptance results.
+- **Backplane/Plane:** kernel WireGuard L3 network for a specific traffic class.
+- **Convergent:** re-runnable process that reaches declared state.
+- **Destruction Boundary:** explicit opt-in flag required before destructive actions.
+- **Reference Workload:** validation workload included to prove platform capability.
+
+---
+
+## 21. Appendix A: One-Page Audit Checklist
+
+### Spec
+- [ ] Schema validated
+- [ ] Constraints enforced (quorum, CIDR non-overlap, VLAN trunks)
+- [ ] Destructive flags explicitly set
+
+### Manufacturing
+- [ ] Locks resolved and stored
+- [ ] Offline content store populated
+- [ ] SBOM generated
+- [ ] Provenance generated
+- [ ] Artifacts hashed and signed
+- [ ] Recovery bundle emitted
+
+### Targets
+- [ ] Boots without internet
+- [ ] Firstboot asserts identity + hardening
+- [ ] Backplanes up before orchestration
+- [ ] Enrollment gated and audited
+
+### Networking
+- [ ] wg1 matrix passes
+- [ ] wg2 passes (if enabled)
+- [ ] wg3 backend passes
+- [ ] default deny inter-plane; allow rules explicit
+
+### Security
+- [ ] SSH password auth disabled
+- [ ] firewall enforced
+- [ ] revocation and rotation procedures defined
+
+### Kubernetes
+- [ ] HA healthy
+- [ ] Cilium healthy
+- [ ] Hubble flows observed and recorded
+- [ ] monitoring reachable on intended plane
+
+### Replaceability
+- [ ] delete-worker drill passes within target
+- [ ] delete-control-plane drill passes within target
+- [ ] acceptance report archived
+
