@@ -105,7 +105,7 @@ In this release, the model is **three planes** (interfaces):
 The payload includes tooling to **apply/refresh plane configs** from a seed (`payload/darksite/apply.py`, `cluster-seed/peers.json`) and to gate convergence on plane readiness (`ansible/playbooks/00_fabric_gate.yml`).
 
 > If UDP can pass, your fleet can become reachable even when DNS/internet is broken.
-
+> There is no **limit**  to the number of planes you can add — just extend the tooling and create your own blast radius.
 ---
 
 ## eBPF: why it matters (and why you’ve already seen it)
