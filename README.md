@@ -1,378 +1,528 @@
 # Kube'd'OS (kubedOS) — Atomic Cluster OS & Lifecycle Platform
 **Status:** Draft / Test Spec (single-file)  
-**Audience:** Systems engineers, SREs, platform engineers (Linux/K8s/Networking/Storage/Proxmox fluent)  
+**Audience:** Platform/SRE/Infra engineers (Linux + Networking + Storage + K8s + Proxmox fluent)  
 **Tagline:** *Build the world. Every time.*  
-**Keywords:** Proxmox VE, Ansible, Salt, WireGuard, Cilium, Hubble, eBPF, OpenZFS, Ceph, kubeadm HA, Prometheus, Grafana, Loki, SBOM, SLSA, air-gapped, dark-site, time-capsule
+**Keywords:** Proxmox VE, Ansible, Salt, WireGuard, Cilium, Hubble, eBPF, OpenZFS, Ceph, kubeadm HA, Prometheus, Grafana, Loki, SBOM, provenance, air-gapped, dark-site, time-capsule, Talos OS (reference)
 
 ---
 
-## 0. Abstract
+## Table of Contents
+
+1. [Abstract](#1-abstract)  
+2. [Normative Language](#2-normative-language)  
+3. [Core Philosophy](#3-core-philosophy)  
+4. [Goals and Non-Goals](#4-goals-and-non-goals)  
+5. [System Model](#5-system-model)  
+6. [Determinism, Reproducibility, and Supply Chain](#6-determinism-reproducibility-and-supply-chain)  
+7. [Threat Model and Security Posture](#7-threat-model-and-security-posture)  
+8. [Build System](#8-build-system)  
+   8.1 [Build Server Requirements](#81-build-server-requirements)  
+   8.2 [Build Inputs and Outputs](#82-build-inputs-and-outputs)  
+   8.3 [Build Stages and DAG](#83-build-stages-and-dag)  
+   8.4 [Sealing, Signing, and Provenance](#84-sealing-signing-and-provenance)  
+9. [Targets](#9-targets)  
+   9.1 [Target Types](#91-target-types)  
+   9.2 [Target Requirements](#92-target-requirements)  
+   9.3 [Target Bootstrap Contract](#93-target-bootstrap-contract)  
+10. [Networking Architecture](#10-networking-architecture)  
+    10.1 [Backplane Model](#101-backplane-model)  
+    10.2 [Planes, Addressing, Routing](#102-planes-addressing-routing)  
+    10.3 [No Accidental Overlay Policy](#103-no-accidental-overlay-policy)  
+11. [Storage Architecture](#11-storage-architecture)  
+12. [Automation Subsystems](#12-automation-subsystems)  
+13. [Kubernetes Reference Workload](#13-kubernetes-reference-workload)  
+14. [Convergence DAG](#14-convergence-dag)  
+15. [ClusterSpec](#15-clusterspec)  
+16. [Outputs](#16-outputs)  
+17. [Acceptance Criteria](#17-acceptance-criteria)  
+18. [Operational Runbooks](#18-operational-runbooks)  
+19. [Documentation and Code Standards](#19-documentation-and-code-standards)  
+20. [Glossary](#20-glossary)  
+21. [Appendix A: One-Page Audit Checklist](#21-appendix-a-one-page-audit-checklist)
+
+---
+
+## 1. Abstract
 
 **Kube'd'OS** is an **atomic, self-deploying clustered platform** that manufactures a complete, secure, reproducible infrastructure base from raw hardware, hypervisors, or cloud instances — in **one convergent operation**.
 
-The system is designed around a non-negotiable premise:
+The platform is built around a single uncompromising premise:
 
 > **If infrastructure cannot be rebuilt from nothing, anywhere, at any time, it is already broken.**
 
-Kube'd'OS produces a **single deployable cluster artifact** (the unit), not a pile of manually tended machines. Kubernetes is included as a **reference workload** because it exercises the full platform surface area (networking, identity, storage, HA, observability). Kube'd'OS is intentionally **vendor-free** and **substrate-agnostic**.
+Kube'd'OS produces a **single deployable cluster artifact** (the unit), not a pile of hand-tended machines. Kubernetes is included as a **reference workload** because it validates the entire platform surface: identity, networking, storage, HA, observability, and lifecycle.
 
-Kube'd'OS aims for **Borg-like operational posture**: connectivity, replaceability, and replication are **platform primitives**, so not only workloads are cattle — **hosts are cattle too**.
-
-> Related ethos: **Talos OS** (immutable, Kubernetes-first). Kube'd'OS shares the “replace, don’t repair” philosophy, while emphasizing **artifact-centric cluster manufacturing**, **explicit backplanes**, and **Proxmox-native IaC**.
+Kube'd'OS aims for **Borg-like operational posture**: connectivity, replaceability, and replication are platform primitives. Workloads are cattle — **and the hosts are cattle too**.
 
 ---
 
-## 1. Normative Language
+## 2. Normative Language
 
-This document uses RFC 2119-style key words:
+This document uses RFC-style key words:
 
-- **MUST / MUST NOT**: absolute requirement
-- **SHOULD / SHOULD NOT**: strong recommendation
-- **MAY**: optional capability
-
-Where “deterministic” is stated, it refers to the defined build contract in §5.
+- **MUST / MUST NOT**: absolute requirement  
+- **SHOULD / SHOULD NOT**: strong recommendation  
+- **MAY**: optional behavior  
 
 ---
 
-## 2. Core Philosophy (Non-Negotiables)
+## 3. Core Philosophy
 
-### 2.1 The Unit Is the Artifact
-- A **cluster** is a single deployable object.
-- **Exact code → exact artifact → exact clone → exact behavior.**
-- Human intervention is treated as a failure mode.
+### 3.1 The Unit Is the Artifact
+- A cluster is a **single deployable object**.
+- **Exact inputs → exact artifact → exact clone → equivalent behavior**.
 
-### 2.2 Proxmox Is Master (When Using Proxmox)
-- Proxmox defines VM lifecycle, templates, storage, bridges, VLAN trunks, placement, and tags.
-- All Proxmox-managed state **MUST** be representable as **Ansible IaC** (idempotent, non-destructive).
+### 3.2 Proxmox Is Master (When Used)
+- Proxmox defines VM lifecycle, templates, bridges, VLANs, storage, tags, placement.
+- All Proxmox state **MUST** be representable as **idempotent Ansible IaC**.
 
-### 2.3 Backplanes Come First
-- Kernel-native L3 networking (WireGuard planes) **MUST** be established during first boot.
-- Orchestration (Salt/Ansible/Kubernetes) runs **on top** of the backplanes.
-- No accidental userland overlay networking “just because it works.”
+### 3.3 Backplanes Come First
+- Kernel-native L3 backplanes (WireGuard planes) **MUST** exist before orchestration.
+- Orchestration runs **on top** of backplanes.
 
-### 2.4 Graph-Based Thinking
-Infrastructure is a DAG. Ordering is explicit. Dependencies are explicit:
-> clone → firstboot → backplanes → discovery → orchestration → workloads → seal
+### 3.4 Graph-Based Deployment
+Ordering is a DAG, not vibes. Dependencies are explicit.
 
 ---
 
-## 3. Goals and Non-Goals
+## 4. Goals and Non-Goals
 
-### 3.1 Goals (What Kube'd'OS Guarantees)
+### 4.1 Goals
 Kube'd'OS **MUST** provide:
 
-1. **Atomic cluster manufacturing**
-   - One operation builds a complete platform from declared inputs.
-2. **Air-gapped / dark-site survivability**
-   - No external repos required after boot to converge the platform.
-3. **Deterministic rebuild**
-   - Given the same inputs and artifact, the resulting cluster behavior is equivalent per §5.
-4. **Explicit multi-plane connectivity**
-   - WireGuard L3 planes as first-class primitives, bound by intent.
-5. **Host replaceability**
-   - Hosts are cattle: platform supports fast node replacement without hand repair.
-6. **Auditable supply chain**
-   - SBOM + provenance + signatures for the artifact and major payloads.
-7. **HA reference workload**
-   - Kubernetes HA pattern with modern CNI visibility (Cilium + Hubble) and baseline monitoring.
+1. **Atomic manufacturing** of a full platform from declared inputs  
+2. **Air-gap survivability** (no external repos after boot)  
+3. **Deterministic rebuild** (defined in §6)  
+4. **Explicit multi-plane backplanes** (wg planes)  
+5. **Host replaceability** as a first-class operation  
+6. **Auditable supply chain** (SBOM + provenance + signatures)  
+7. **HA reference workload** (Kubernetes + Cilium/Hubble + monitoring baseline)  
 
-### 3.2 Non-Goals (What This Is Not)
+### 4.2 Non-Goals
 Kube'd'OS is **NOT**:
-- A general-purpose Linux distribution
-- A hosted SaaS control plane
-- A “click-ops” platform
-- A “download latest from the internet” bootstrapper
-- A promise to run every arbitrary K8s topology without declared constraints
+- a general-purpose Linux distribution
+- a “latest from the internet” bootstrapper
+- a hosted SaaS control plane
+- an implicit overlay networking platform by default
 
 ---
 
-## 4. System Model
+## 5. System Model
 
-### 4.1 Conceptual Layers (Fixed Order)
-1. **Substrate**
-   - Bare metal, Proxmox VE, or cloud instance primitives
-2. **Node identity + first boot**
-3. **Kernel-native networking backplanes**
-4. **Security baseline**
-5. **Discovery & coordination (Salt)**
-6. **Idempotent converge (Ansible)**
-7. **Workload(s) (Kubernetes reference)**
-8. **Seal & provenance (rebuild anchor)**
+### 5.1 Fixed Layer Order
+1. Substrate (metal / Proxmox / cloud)  
+2. Node identity + first boot  
+3. Kernel networking backplanes  
+4. Security baseline  
+5. Discovery & coordination (Salt)  
+6. Idempotent convergence (Ansible)  
+7. Workloads (Kubernetes reference)  
+8. Seal + provenance (rebuild anchor)  
 
-### 4.2 Artifact Types
-Kube'd'OS produces **a platform artifact** plus **recovery artifacts**:
-
-- **Platform Artifact** (bootable, self-contained):
-  - ISO / raw disk image / cloud image (implementation-dependent)
-- **Recovery Bundle** (offline anchor):
-  - ClusterSpec, manifests, SBOM, signatures, keys policy, snapshot pointers, upgrade plan, and test results
+### 5.2 Artifacts
+A successful build produces:
+- **Platform Artifact**: bootable image(s) for one or more targets  
+- **Recovery Bundle**: ClusterSpec + manifests + SBOM + signatures + tests  
 
 ---
 
-## 5. Determinism, Reproducibility, and the Build Contract
+## 6. Determinism, Reproducibility, and Supply Chain
 
-### 5.1 Determinism Definition
-Kube'd'OS determinism is defined as:
+### 6.1 Determinism Contract
+Kube'd'OS determinism means:
 
-- **Input deterministic**: For a given *ClusterSpec* + artifact version + pinned payloads, the resulting system converges to an equivalent declared state.
-- **Audit deterministic**: The build emits enough provenance to explain exactly what was built and why.
-- **Operational deterministic**: Recovery and rebuild procedures are mechanical and repeatable.
+- **Input-deterministic:** same ClusterSpec + artifact version + pinned payloads → equivalent converged state  
+- **Audit-deterministic:** provenance explains exactly what was built and why  
+- **Recovery-deterministic:** rebuild procedures are mechanical  
 
-Bit-for-bit identical disk images are a **MAY**, not a MUST, but functional determinism is a **MUST**.
+Bit-for-bit identical images are a **MAY**; functional determinism is a **MUST**.
 
-### 5.2 Supply Chain Requirements
-The build process **MUST**:
-- Pin versions for:
-  - OS packages
-  - kernel
-  - Kubernetes version + kubeadm components
-  - Cilium + Hubble
-  - Salt + Ansible runtimes
-  - observability stack (Prometheus/Grafana/Loki) if embedded
-- Produce an **SBOM** for:
-  - OS packages
-  - container images
-  - binaries shipped (if any)
-- Produce **provenance metadata**:
-  - git commit, build tool versions, timestamps, build host identity policy
-- Sign:
-  - artifact
-  - recovery bundle manifests
-  - optionally individual payloads
+### 6.2 Pinned Dependencies
+The platform **MUST** pin versions for:
+- OS packages and kernel
+- Salt and Ansible runtimes
+- container images required for platform and reference workload
+- Kubernetes and critical addons (kubeadm components, Cilium, Hubble)
+- observability stack if embedded (Prometheus/Grafana/Loki)
 
-Suggested bar: **SLSA-ish** posture (not necessarily full compliance, but aligned).
+### 6.3 SBOM and Provenance
+The build **MUST** emit:
+- SBOM (OS packages + container images + shipped binaries)
+- Provenance metadata (git commit, build tool versions, timestamps, build host identity policy)
 
-### 5.3 Air-Gap / Dark-Site Requirements
-Kube'd'OS artifacts **MUST** include:
-- OS package repository content sufficient for convergence
-- Container images required for platform + reference workload
-- All scripts and orchestration logic
-- Any schema validation tooling required to interpret ClusterSpec
-
-Kube'd'OS **MUST NOT** require:
-- public apt/yum mirrors
-- live GitHub fetches
-- “curl | bash”
-- external identity brokers
+### 6.4 Signatures
+The build **MUST** sign:
+- platform artifact(s)
+- recovery bundle manifests (and optionally all payloads)
 
 ---
 
-## 6. Threat Model and Security Posture
+## 7. Threat Model and Security Posture
 
-### 6.1 Threat Model (Baseline)
-Kube'd'OS is designed to tolerate:
-- Total loss of nodes / substrate (rebuild from artifact)
-- Compromise of one node (containment and replaceability)
-- Operator error at scale (mechanical redeploy beats artisanal repair)
-- Supply chain drift (pinned + signed + offline payloads)
+### 7.1 Baseline Threats
+Designed to tolerate:
+- total substrate loss (redeploy from artifact)
+- loss/compromise of individual nodes (fence + replace)
+- operator error at scale (rebuild beats repair)
+- supply-chain drift (pinned + signed + offline)
 
-Out of scope unless explicitly enabled:
-- Advanced side-channel resistance
-- Fully byzantine fault tolerance across all components
-
-### 6.2 Trust & Identity (Bootstrap)
+### 7.2 Trust Bootstrap (Required)
 Kube'd'OS **MUST** define a bootstrap trust model. Recommended default:
+- offline root CA
+- per-cluster intermediate CA
+- per-node identity (cert/keypair) issued at enrollment
 
-- **Offline Root CA** (stored out-of-band)
-- **Cluster Intermediate CA** generated per cluster artifact run
-- Node identity:
-  - Each node gets a unique identity (cert/keypair)
-  - Enrollment is gated (see §6.3)
-
-### 6.3 Enrollment and Revocation
+### 7.3 Enrollment and Revocation
 Kube'd'OS **MUST** support:
-- Secure enrollment gating (token + cert pinning or offline join approval)
-- Node revocation:
-  - ability to revoke node identity and deny plane participation
-  - ability to rotate WireGuard keys and relevant credentials
+- gated enrollment (token + pin / offline approval)
+- revocation and rotation of:
+  - WireGuard keys
+  - node identities
+  - Kubernetes certs (as defined)
 
-### 6.4 Secrets Handling
-Kube'd'OS **MUST** document:
-- Where secrets live (filesystem vs KMS vs TPM)
-- How secrets are rotated
-- How secrets are recovered in air-gapped mode
-
-Implementation MAY use:
-- sops + age (offline-friendly)
-- sealed-secrets
-- TPM-backed keys (optional)
-
-### 6.5 Baseline Hardening Requirements
-Kube'd'OS baseline **MUST** include:
-- SSH: key-only, no password auth, strong ciphers, strict access policy
-- Host firewall policy: default deny inbound on non-plane interfaces
-- Kernel sysctls: sane network hardening baseline
-- Audit strategy (auditd/eBPF policy) documented
-- Minimal package surface: no “kitchen sink” images
+### 7.4 Baseline Hardening
+Kube'd'OS **MUST** define:
+- SSH policy (key-only, allowed users/groups, cipher baseline)
+- firewall policy (default deny inbound on non-plane interfaces)
+- kernel/sysctl baseline
+- logging/audit strategy
 
 ---
 
-## 7. Networking Architecture (Backplane Model)
+## 8. Build System
 
-### 7.1 Non-Negotiables
-- Backplanes are **WireGuard**, kernel-level, L3 routed.
-- Backplanes **MUST** come up during first boot.
-- Services **MUST** bind intentionally to planes (no accidental exposure).
+Kube'd'OS is manufactured by a **build server** that produces **portable target artifacts** and a **recovery bundle**.
 
-### 7.2 Planes (Reference)
-A canonical three-plane model (names are conventional, not mandatory):
+### 8.1 Build Server Requirements
 
-- **wg1 — Control Plane**
-  - SSH, Salt control, Ansible, administrative API surfaces
-- **wg2 — Observability Plane**
-  - metrics/logs/traces transport, out-of-band debugging
-- **wg3 — Kubernetes Backend Plane**
-  - control-plane ↔ worker, east-west service transport if defined
+The build server is a *deterministic manufacturing environment*, not a “developer workstation”.
 
-### 7.3 Addressing and Routing
-- Each plane **MUST** have an explicit CIDR in ClusterSpec.
-- Nodes **MUST** have stable plane IPs (static or deterministically derived).
-- Routing policy **MUST** be declared:
-  - Allowed inter-plane flows
-  - Default deny between planes unless explicitly allowed
+**Hardware / execution**
+- MUST run Linux (x86_64) with a stable kernel/toolchain.
+- SHOULD be dedicated (or a hardened VM) to avoid tool drift.
+- MUST have sufficient CPU/RAM/storage for image construction and caching.
 
-### 7.4 “No Accidental Overlay” Policy
-- Kube'd'OS **MUST NOT** deploy a userland overlay networking CNI by default as a convenience.
-- If Kubernetes overlay behavior is required, it **MUST** be explicit in ClusterSpec, and **MUST** be auditable.
+**Connectivity**
+- MUST be able to build in two modes:
+  - **Online mode:** to refresh mirrors, registries, and upstream release pins intentionally
+  - **Offline mode:** rebuild artifacts from cached inputs and locked manifests
+- SHOULD support a local mirror/cacher for:
+  - OS packages
+  - container registry content
+  - git dependencies (if any)
+
+**Security posture**
+- MUST store signing keys in a controlled manner:
+  - preferred: offline signing or HSM/TPM-backed keys
+  - acceptable: encrypted key material with strict access and audit
+- MUST produce tamper-evident logs for build runs.
+
+**Determinism control**
+- MUST pin all build tooling versions (containerized build toolchain or pinned packages).
+- MUST generate a build manifest recording:
+  - tool versions
+  - host identity policy
+  - input checksums
+  - output checksums
+
+### 8.2 Build Inputs and Outputs
+
+**Inputs (required)**
+- ClusterSpec (validated schema)
+- Version locks (platform + payload pins)
+- Package and image manifests (declared sets)
+- Cryptographic policy (CA mode, signing policy)
+- Target matrix (what images to produce)
+
+**Outputs (required)**
+- One or more **Target Artifacts** (see §9)
+- Recovery Bundle:
+  - ClusterSpec (final rendered)
+  - artifact manifest(s)
+  - SBOM(s)
+  - provenance metadata
+  - signatures
+  - acceptance test report template/results
+
+### 8.3 Build Stages and DAG
+
+Build server manufacturing is a DAG with explicit gates:
+
+1. **Spec Validation Gate**
+   - Validate ClusterSpec + constraints
+2. **Resolve + Lock Gate**
+   - Resolve upstream versions → write immutable lockfiles
+3. **Acquire Inputs Gate**
+   - Download/sync packages and images into a local content store
+4. **Assemble RootFS / Base Image Gate**
+   - Construct base OS layer and hardening baseline
+5. **Embed Payloads Gate**
+   - Salt/Ansible runtime, cluster logic, offline repos, container images
+6. **Target Image Build Gate**
+   - Produce target-specific artifact(s) (Proxmox template image, ISO, cloud image)
+7. **Seal Gate**
+   - Hash, SBOM, sign, provenance emit
+8. **Acceptance Preflight Gate**
+   - Static checks (manifests complete, signatures valid, schema ok)
+
+### 8.4 Sealing, Signing, and Provenance
+
+A build is not “real” until sealed.
+
+**Sealing MUST include**
+- cryptographic hashes of every artifact output
+- SBOM generation
+- provenance record (git commit, lockfile hashes, toolchain versions)
+- signatures over:
+  - manifests
+  - artifact hashes
+
+**Sealing SHOULD include**
+- reproducibility note: how to rebuild *this* artifact from the same locks
+- artifact naming convention that encodes:
+  - kubedOS version
+  - target type
+  - build date
+  - content hash prefix
 
 ---
 
-## 8. Storage Architecture
+## 9. Targets
 
-### 8.1 OpenZFS (Integrity + Rollback)
-Kube'd'OS **SHOULD** support OpenZFS for:
-- system state anchoring
-- snapshots and rollback
-- deterministic base template sealing
+A **target** is any substrate-specific output format that can be booted or imported to create nodes.
 
-### 8.2 Ceph (Replication + Stateful Workloads)
-Kube'd'OS **MAY** integrate Ceph as a platform primitive for:
-- replicated block/object storage
-- stateful workload durability
+### 9.1 Target Types
 
-If Ceph is enabled, ClusterSpec **MUST** define:
+Kube'd'OS SHOULD support the following target types:
+
+1. **Proxmox Target**
+   - QEMU-compatible disk image suitable for conversion into a VM template
+   - Includes cloud-init or firstboot mechanism compatible with Proxmox workflows
+2. **Bare Metal Target**
+   - Bootable ISO or raw disk image for direct installation/boot
+3. **Cloud Target**
+   - Cloud image formats (e.g., raw/qcow2) suitable for import into cloud providers
+   - No dependency on hosted control planes beyond basic instance provisioning
+
+### 9.2 Target Requirements
+
+All targets **MUST** satisfy:
+- boot-to-converge without requiring internet access
+- firstboot includes:
+  - identity seed
+  - backplane bring-up
+  - enrollment + discovery hooks
+- embedded offline content:
+  - OS packages required for converge
+  - container images required for platform + reference workload
+- clear separation:
+  - platform manufacturing logic baked in
+  - environment-specific config layered via ClusterSpec and/or post-config
+
+### 9.3 Target Bootstrap Contract
+
+On first boot, each target node **MUST**:
+1. Establish baseline OS identity (hostname, users, SSH policy)
+2. Apply baseline hardening
+3. Bring up WireGuard backplanes (wg planes)
+4. Enroll into cluster coordination (Salt) under gating rules
+5. Expose readiness signals over the control plane (wg1)
+6. Await converge orchestration steps (Ansible)
+
+Targets **MUST NOT**:
+- “phone home” to public repos
+- silently pull latest images
+- accept unauthenticated join attempts
+
+---
+
+## 10. Networking Architecture
+
+### 10.1 Backplane Model
+Kube'd'OS networking is defined by **explicit WireGuard L3 planes**. Planes are:
+- kernel-level
+- explicitly addressed (CIDR per plane)
+- policy-defined (default deny between planes unless allowed)
+
+### 10.2 Planes, Addressing, Routing
+
+Reference plane set (names conventional):
+- **wg1:** control / SSH / Salt / Ansible
+- **wg2:** observability transport (metrics/logs/traces)
+- **wg3:** Kubernetes backend (control-plane ↔ worker + east-west as defined)
+
+Requirements:
+- Each plane MUST have a CIDR in ClusterSpec.
+- Node plane addresses MUST be static or deterministically derived.
+- Inter-plane flows MUST be explicit.
+- Default MUST be deny for inter-plane.
+
+### 10.3 No Accidental Overlay Policy
+Kube'd'OS **MUST NOT** deploy a userland overlay network “by surprise”.
+If overlay-like behavior is required, it MUST be explicitly declared and auditable.
+
+---
+
+## 11. Storage Architecture
+
+### 11.1 OpenZFS
+Kube'd'OS SHOULD support OpenZFS for:
+- integrity-first root/state
+- snapshots/rollback
+- template sealing and clone safety
+
+### 11.2 Ceph
+Kube'd'OS MAY integrate Ceph for replicated storage.
+If enabled, ClusterSpec MUST define:
 - failure domains
-- replication size / min_size
-- network binding (which plane(s) carry Ceph traffic)
-- recovery and rebuild semantics
+- replication size/min_size
+- network binding (which plane)
+- recovery behavior
 
 ---
 
-## 9. Automation Subsystems (Salt + Ansible)
+## 12. Automation Subsystems
 
-### 9.1 Separation of Deployment and Configuration (Mandatory)
-- **Deployment** manufactures platform: immutable, deterministic, auditable.
-- **Configuration** is layered: disposable, replaceable, environment-specific.
+### 12.1 Salt (Bootstrap + Discovery)
+Salt MUST be identity-bound and enrollment-gated.
+Use Salt for:
+- join workflows
+- peer enumeration
+- bootstrap coordination
 
-### 9.2 Salt (Bootstrap + Discovery + Coordination)
-Salt is used where speed and coordination matter:
-- secure enrollment / join workflow
-- fast peer discovery
-- cluster-wide execution for bootstrap steps
-
-Salt usage **MUST** be:
-- identity-bound
-- minimal and intentional (bootstrap control, not endless configuration sprawl)
-
-### 9.3 Ansible (Idempotent Convergence + Lifecycle)
-Ansible is used for:
-- declarative role application
-- safe reruns
-- auditing drift and applying intended state
-
-Ansible runs **MUST** be:
-- idempotent
-- non-destructive by default
-- safe-to-rerun documented per role
+### 12.2 Ansible (Idempotent Converge)
+Ansible MUST:
+- converge roles idempotently
+- be safe to re-run
+- document which operations are destructive and require explicit enablement
 
 ---
 
-## 10. Kubernetes Reference Workload (HA-First)
+## 13. Kubernetes Reference Workload
 
-### 10.1 What “Reference Workload” Means
-Kubernetes is included to validate the platform. The platform is the product.
+### 13.1 HA Model
+Kube'd'OS MUST document HA topology:
+- control-plane replica count and quorum requirements
+- etcd topology (stacked vs external) and tradeoffs
+- failure domains and placement
 
-### 10.2 HA Pattern Requirements
-Kube'd'OS **MUST** implement an HA pattern consistent with upstream kubeadm HA guidance:
-- multiple control-plane nodes
-- etcd topology documented (stacked or external)
-- defined failure domains
-- upgrade strategy defined (surge, rolling, or replace-based)
+### 13.2 Cilium + Hubble
+Kube'd'OS SHOULD ship Kubernetes with:
+- **Cilium** as the CNI
+- **Hubble** enabled for flow visibility
 
-### 10.3 Networking and Visibility: Cilium + Hubble
-Kube'd'OS **SHOULD** ship Kubernetes with:
-- **Cilium** as CNI (eBPF-based networking + policy)
-- **Hubble** for flow visibility
+The system MUST document:
+- policy defaults
+- plane bindings and exposure model
+- minimum required kernel features
 
-The system **MUST** document:
-- datapath mode and assumptions
-- policy defaults (deny/allow posture)
-- how Hubble is exposed (plane binding + auth)
+### 13.3 Observability Baseline
+Kube'd'OS SHOULD include pinned patterns for:
+- Prometheus
+- Grafana
+- Loki
 
-### 10.4 Baseline Monitoring
-Kube'd'OS **SHOULD** provide a baseline observability stack pattern:
-- Prometheus + Grafana + Loki (or equivalents) in a declared and pinned form
-- plane binding (wg2 recommended)
-
----
-
-## 11. Operational Model: Replace, Don’t Repair
-
-### 11.1 Host Replaceability
-Kube'd'OS **MUST** support a host lifecycle where:
-- A node can be destroyed and replaced without hand reconfiguration.
-- Replacement is achieved by:
-  - provisioning from artifact (or template)
-  - enrollment + backplane join
-  - converge + workload reattachment
-
-### 11.2 Self-Healing (Defined, Not Vague)
-When this document says “self-healing,” it means:
-
-- **Detect**: node is unhealthy or absent (criteria declared)
-- **Fence**: remove it from scheduling / quorum participation safely
-- **Replace**: provision a new node deterministically
-- **Reintegrate**: converge, rejoin planes, restore workload placement
-
-Mechanisms and thresholds **MUST** be specified in ClusterSpec (or documented defaults).
+Bound intentionally to the observability plane (wg2) by default.
 
 ---
 
-## 12. Convergence DAG (Ordering Guarantees)
+## 14. Convergence DAG
 
-Kube'd'OS convergence **MUST** follow this DAG:
+Kube'd'OS convergence is a **strict DAG**. Each stage has:
+- **Inputs** (what it consumes)
+- **Outputs** (what it produces)
+- **Idempotency contract** (what is safe to re-run)
+- **Destruction boundary** (what requires explicit opt-in)
 
-1. **Validate Spec**
-   - Validate ClusterSpec schema, constraints, and invariants.
-2. **Provision Substrate**
-   - Proxmox: VMs, bridges, VLAN trunks, storage attach, tags, placement.
-   - Cloud/bare metal: instance primitives as declared.
-3. **First Boot**
-   - Disk layout, hostname, base users, baseline hardening.
-4. **Backplanes Up**
-   - WireGuard wg1/wg2/wg3 configured, routes installed, firewall rules applied.
-5. **Discovery / Enrollment**
-   - Salt enrollment, peer enumeration, identity verification.
-6. **Converge Platform Roles**
-   - Ansible idempotent application: runtime dependencies, storage primitives.
-7. **Bring Up Reference Workload**
-   - Kubernetes HA, Cilium/Hubble, baseline monitoring.
-8. **Seal**
-   - Snapshot templates (where applicable), emit recovery bundle, emit test results.
+### 14.1 Canonical DAG
 
-### 12.1 Idempotency and Safe Re-runs
-For each stage, the system **MUST** document whether it is:
-- Safe to re-run (no-op if already converged)
-- Safe with drift (will remediate drift)
-- Potentially destructive (requires explicit “allow-destroy”)
+**Stage 0 — Spec Validation**
+- **Inputs:** ClusterSpec, schema, policy constraints, version locks (or lock policy)
+- **Outputs:** validated + normalized spec, rendered inventories, target matrix, plan graph
+- **Idempotency:** **SAFE** (pure)
+- **Destructive:** **NO**
 
-Default posture: **non-destructive**.
+**Stage 1 — Substrate Provision**
+- **Inputs:** validated spec, substrate credentials, placement + storage policy
+- **Outputs:** nodes instantiated (VMs/instances), NIC attachments, VLAN tags, storage volumes, metadata/tags
+- **Idempotency:** **SAFE** if using non-destructive reconcile; drift is reconciled where possible
+- **Destructive:** **MAYBE** (only when `spec.substrate.allowDestroy=true`)
+
+**Stage 2 — Firstboot Identity + Baseline**
+- **Inputs:** target artifact, node identity seed mechanism, baseline hardening policy
+- **Outputs:** host identity, SSH policy enforced, firewall baseline, immutable markers, bootstrap logs
+- **Idempotency:** **SAFE** (re-run results in no-op or re-assert)
+- **Destructive:** **NO**
+
+**Stage 3 — Backplanes Up (Kernel WireGuard Planes)**
+- **Inputs:** plane CIDRs + node assignments, key material policy, routing policy
+- **Outputs:** wg1/wg2/wg3 interfaces up, routes installed, plane firewall policy enforced
+- **Idempotency:** **SAFE** (re-assert interface config + peers)
+- **Destructive:** **NO** (rotation is explicit, see §18.3)
+
+**Stage 4 — Enrollment + Discovery (Salt)**
+- **Inputs:** enrollment gating policy, CA policy, join tokens/pins, node attest/identity
+- **Outputs:** authenticated membership, peer inventory, role mapping, reachable matrix
+- **Idempotency:** **SAFE** (repeatable enrollment checks)
+- **Destructive:** **NO** (revocation is explicit)
+
+**Stage 5 — Platform Converge (Ansible)**
+- **Inputs:** rendered inventories, platform roles, offline repos, pinned payload manifests
+- **Outputs:** storage primitives prepared, runtime deps installed, services configured and bound to planes
+- **Idempotency:** **SAFE** by default; drift remediation per role contract
+- **Destructive:** **MAYBE** (only with explicit role flags such as `allowRepartition`, `allowWipe`)
+
+**Stage 6 — Reference Workload Bring-up (Kubernetes)**
+- **Inputs:** HA topology, PKI policy, kubeadm config, Cilium/Hubble config, registries (offline)
+- **Outputs:** HA control plane, workers joined, Cilium + Hubble healthy, baseline observability online
+- **Idempotency:** **SAFE** for reconciliation steps; cluster init is **ONCE**
+- **Destructive:** **MAYBE** (reset requires explicit `kubernetes.allowReset=true`)
+
+**Stage 7 — Seal + Emit**
+- **Inputs:** final state inventory, test results, manifests, SBOM/provenance/signature policy
+- **Outputs:** recovery bundle, signed manifests, snapshot/template seals (where applicable), CI artifacts
+- **Idempotency:** **SAFE** (re-emit consistent outputs; signatures may differ if timestamped)
+- **Destructive:** **NO**
+
+### 14.2 Stage Contracts: Re-run Safety Matrix
+
+| Stage | Safe to Re-run | Drift Remediated | Can Destroy | Requires Explicit Opt-in |
+|------:|:---------------:|:----------------:|:-----------:|:------------------------:|
+| 0 Spec Validation | ✅ | n/a | ❌ | ❌ |
+| 1 Substrate Provision | ✅ | ✅ (bounded) | ⚠️ | ✅ `allowDestroy` |
+| 2 Firstboot | ✅ | ✅ | ❌ | ❌ |
+| 3 Backplanes | ✅ | ✅ | ❌ | ❌ |
+| 4 Enrollment/Discovery | ✅ | ✅ | ❌ | ❌ (revocation separate) |
+| 5 Platform Converge | ✅ | ✅ | ⚠️ | ✅ per-role allow flags |
+| 6 Kubernetes | ✅* | ✅ | ⚠️ | ✅ `allowReset` |
+| 7 Seal/Emit | ✅ | n/a | ❌ | ❌ |
+
+\* Kubernetes init is a one-time action; reconciliation is repeatable.
+
+### 14.3 Ordering Guarantees (Non-Negotiable)
+- **Backplanes MUST exist** before any orchestration that assumes connectivity.
+- **Enrollment MUST be gated** before nodes are allowed to participate.
+- **Workloads MUST NOT start** before platform primitives (storage, PKI, networking policy) are asserted.
+- **Sealing MUST NOT occur** before acceptance results are recorded.
 
 ---
 
-## 13. ClusterSpec (User-Facing Interface)
+## 15. ClusterSpec
 
-Kube'd'OS **MUST** have a single declarative ClusterSpec. Example schema (illustrative):
+Kube'd'OS **MUST** use a single declarative ClusterSpec (YAML) as the authoritative input. It is the contract between:
+- build server (manufacturing)
+- substrate provisioner (targets)
+- orchestration layers (Salt/Ansible)
+- workload bring-up (Kubernetes)
+
+### 15.1 Schema Design Rules
+- Every field is either:
+  - **declarative desired state**, or
+  - **policy boundary** (explicit opt-in for destructive behavior)
+- No “magic defaults” that hide topology. Defaults MUST be safe and MUST be documented.
+- Version references MUST be resolved to locks during manufacturing (see §8.3 earlier).
+
+### 15.2 Illustrative ClusterSpec (Extended)
 
 ```yaml
 apiVersion: kubedos.ca/v1alpha1
@@ -380,129 +530,155 @@ kind: Cluster
 metadata:
   name: lab-01
   artifactVersion: "0.1.0"
-  intent: "reproducible-platform"
+  labels:
+    owner: platform
+    purpose: reference
 spec:
+  # ---- Substrate (Target + Provision) ----
   substrate:
     type: proxmox
+    allowDestroy: false        # explicit boundary for destructive reconcile
     proxmox:
       clusterName: pve-01
-      storagePools:
-        - name: fast-zfs
-          type: zfs
+      vmidRange: { start: 2000, end: 2099 }
+      placement:
+        strategy: spread
+        by: [node, failureDomain]
       bridges:
         - name: vmbr0
           vlanAware: true
           trunks: [10, 20, 30]
+      storagePools:
+        - name: fast-zfs
+          type: zfs
       tags:
         - kubedos
-        - artifact:0.1.0
+        - "artifact:0.1.0"
 
+  # ---- Nodes (Roles + Failure Domains) ----
   nodes:
-    vmidRange: { start: 2000, end: 2099 }
     failureDomains:
       - name: rack-a
       - name: rack-b
     inventory:
       - name: cp-1
         role: control-plane
-        domain: rack-a
-        cpu: 4
-        memoryMiB: 8192
+        failureDomain: rack-a
+        resources: { cpu: 4, memoryMiB: 8192 }
         disks:
-          - pool: fast-zfs
-            sizeGiB: 64
+          - { pool: fast-zfs, sizeGiB: 64, purpose: os }
         nics:
-          - bridge: vmbr0
-            vlan: 10
+          - { bridge: vmbr0, vlan: 10, purpose: uplink }
       - name: cp-2
         role: control-plane
-        domain: rack-b
-        cpu: 4
-        memoryMiB: 8192
+        failureDomain: rack-b
+        resources: { cpu: 4, memoryMiB: 8192 }
         disks:
-          - pool: fast-zfs
-            sizeGiB: 64
+          - { pool: fast-zfs, sizeGiB: 64, purpose: os }
         nics:
-          - bridge: vmbr0
-            vlan: 10
+          - { bridge: vmbr0, vlan: 10, purpose: uplink }
+      - name: cp-3
+        role: control-plane
+        failureDomain: rack-a
+        resources: { cpu: 4, memoryMiB: 8192 }
+        disks:
+          - { pool: fast-zfs, sizeGiB: 64, purpose: os }
+        nics:
+          - { bridge: vmbr0, vlan: 10, purpose: uplink }
       - name: w-1
         role: worker
-        domain: rack-a
-        cpu: 8
-        memoryMiB: 16384
+        failureDomain: rack-a
+        resources: { cpu: 8, memoryMiB: 16384 }
         disks:
-          - pool: fast-zfs
-            sizeGiB: 128
+          - { pool: fast-zfs, sizeGiB: 128, purpose: os }
         nics:
-          - bridge: vmbr0
-            vlan: 10
+          - { bridge: vmbr0, vlan: 10, purpose: uplink }
 
+  # ---- Networking (Planes + Policy) ----
   networking:
     planes:
-      wg1:
-        cidr: 10.101.0.0/24
-        purpose: control
-      wg2:
-        cidr: 10.102.0.0/24
-        purpose: observability
-      wg3:
-        cidr: 10.103.0.0/24
-        purpose: kubernetes-backend
+      wg1: { cidr: 10.101.0.0/24, purpose: control }
+      wg2: { cidr: 10.102.0.0/24, purpose: observability }
+      wg3: { cidr: 10.103.0.0/24, purpose: kubernetes-backend }
+    addressing:
+      mode: deterministic     # deterministic / static / dhcp-resolved (must be explicit)
     policy:
       defaultInterPlane: deny
       allow:
-        - from: wg1
-          to: wg3
-          ports: ["6443/tcp", "2379-2380/tcp"]
-        - from: wg2
-          to: wg3
-          ports: ["9090/tcp", "3100/tcp"]
+        - { from: wg1, to: wg3, ports: ["6443/tcp","2379-2380/tcp","10250/tcp"] }
+        - { from: wg2, to: wg3, ports: ["9090/tcp","3000/tcp","3100/tcp"] }
 
+  # ---- Security (Trust + Enrollment + Rotation) ----
   security:
     bootstrap:
-      model: offline-ca
+      model: offline-ca       # offline-ca / pinned-ca / to-fu (TOFU discouraged)
       caFingerprint: "sha256:REDACTED"
+    enrollment:
+      mode: token+pin         # token+pin / offline-approve / cert-preseed
+      joinWindowMinutes: 30
     ssh:
       allowUsers: ["ops"]
       passwordAuth: false
-    keyRotation:
+    rotation:
       wireguardDays: 30
+      nodeCertDays: 90
       kubeCertDays: 90
 
+  # ---- Storage (ZFS + Ceph) ----
   storage:
     zfs:
       enabled: true
       pools: ["fast-zfs"]
+      snapshotPolicy:
+        system: { hourly: 24, daily: 7, weekly: 4 }
     ceph:
       enabled: false
+      # if enabled, must define size/min_size/failureDomains/plane binding, etc.
 
+  # ---- Orchestration ----
   orchestration:
     salt:
       enabled: true
-      enrollment: token+pin
+      purpose: bootstrap+discovery
     ansible:
       enabled: true
-      mode: converge
+      purpose: converge+lifecycle
+      safety:
+        allowRepartition: false
+        allowWipe: false
 
+  # ---- Kubernetes Reference Workload ----
   kubernetes:
     enabled: true
-    version: "v1.30.x"   # pinned via artifact manifest
+    allowReset: false
+    version: "v1.30.x"        # resolved to locks at build time
     ha:
       controlPlaneReplicas: 3
       etcd: stacked
     cni:
       name: cilium
       hubble: true
+      policyDefault: deny
     observability:
-      prometheus: true
-      grafana: true
-      loki: true
+      enabled: true
+      stack:
+        prometheus: true
+        grafana: true
+        loki: true
+      bindPlane: wg2
 
+  # ---- Acceptance + Drills ----
   acceptance:
     mttrTargetMinutes: 30
+    required:
+      - backplane-matrix
+      - security-baseline
+      - k8s-health
+      - cilium-health
+      - hubble-flows
     drills:
-      - name: "delete-worker-vm"
+      - name: delete-worker
         expectRecoveryMinutes: 10
-      - name: "delete-control-plane-vm"
+      - name: delete-control-plane
         expectRecoveryMinutes: 20
 
