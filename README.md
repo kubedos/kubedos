@@ -1,6 +1,6 @@
 # Kubedos — Build Once, Deploy Everywhere
 
-> **A build + deploy system that treats the operating system like a Kubernetes workload.**  
+> **A build + deploy system that treats the operating system like a Kubernetes workload.**
 > You don’t “install servers.” You **manufacture sealed OS artifacts** and **replace nodes instead of repairing them**.
 
 KubeDOS exists to deliver **platforms as cattle** across Proxmox, bare metal, microVMs, and (optionally) cloud targets — with a sane security baseline and “quality of life” tooling baked in.
@@ -75,11 +75,11 @@ KubeDOS artifacts boot with the essential “platform wiring” already availabl
 
 So you don’t do the traditional dance:
 
-- wait for cloud-init  
-- wait for apt mirrors  
-- install bootstrap tools  
-- hope DNS works  
-- then begin convergence  
+- wait for cloud-init
+- wait for apt mirrors
+- install bootstrap tools
+- hope DNS works
+- then begin convergence
 
 Instead: **boot → fabric → converge**.
 
@@ -151,20 +151,20 @@ Build artifacts that can operate offline but still allow connected mirrors when 
 
 `deploy.sh` exposes these key controls:
 
-- `REPO_MODE=connected|darksite|both`  
+- `REPO_MODE=connected|darksite|both`
   Controls whether an ISO-local APT snapshot is built and embedded.
 
-- `REPO_PROFILE=base|base+updates|full`  
+- `REPO_PROFILE=base|base+updates|full`
   Controls how much of Debian you snapshot/include.
 
-- `DARKSITE_SRC=/path/to/payload/darksite`  
+- `DARKSITE_SRC=/path/to/payload/darksite`
   Controls where the darksite payload comes from (defaults to repo-local `payload/darksite` if present).
 
 This is the “linkage” that matters:
 
-- **Connected** = smaller artifacts + dependency on mirrors  
-- **Darksite** = larger artifacts + independence + deterministic installs  
-- **Both** = portable artifacts that survive hostile networks  
+- **Connected** = smaller artifacts + dependency on mirrors
+- **Darksite** = larger artifacts + independence + deterministic installs
+- **Both** = portable artifacts that survive hostile networks
 
 ---
 
