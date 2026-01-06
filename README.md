@@ -1,465 +1,205 @@
 # Kubedos — Build Once, Deploy Everywhere
 
-> **A single-step installer that treats the OS like a Kubernetes workload.**
-> Build immutable infrastructure, deploy it anywhere, and rebuild the entire world on demand.
+> **A build + deploy system that treats the operating system like a Kubernetes workload.**  
+> You don’t “install servers.” You **manufacture sealed OS artifacts** and **replace nodes instead of repairing them**.
 
-KubeDOS exists to "deliver" "platfourms" as "cattle" anywhere, it also includes basic security and quality of life "tools" as "defaults"
+KubeDOS exists to deliver **platforms as cattle** across Proxmox, bare metal, microVMs, and (optionally) cloud targets — with a sane security baseline and “quality of life” tooling baked in.
 
-**it can’t be rebuilt exactly the same way, twice.**
+If you can’t rebuild the same platform from scratch, on demand, you don’t have infrastructure — you have archaeology.
 
-Images drift. Hosts turn into pets. Recovery becomes archaeology.  
-And when something breaks at scale, “fixing it” becomes a lifestyle.
+KubeDOS flips the model:
 
-KubeDOS flips that.
+- **Build** a deterministic OS artifact (ISO/QCOW2/etc.)
+- **Deploy** it anywhere
+- **Converge** the platform using tooling already inside the artifact
+- **Replace** broken nodes instead of fixing them
 
-Instead of **repairing** infrastructure, you **replace** it.  
-Instead of **installing** servers, you **manufacture deployable artifacts**.
-
-If Kubernetes can treat containers like cattle…  
-KubeDOS treats the **OS itself** like cattle too.
+This is an **MTTR tool** first: it turns disaster recovery into “recreate the world” instead of “recover the pets.”
 
 ---
 
-## What is KubeDOS?
+## What KubeDOS is (in one sentence)
 
-KubeDOS is a build + deploy system that produces **sealed OS artifacts**, then deploys them as whole workloads:
-
-- QCOW2 images for Proxmox / QEMU/KVM  
-- ISO installers for bare metal  
-- VMDK for ESXi (optional path)  
-- Firecracker/Kata microVM rootfs + kernel bundles  
-- Cloud images (AWS/Azure/GCP optional path)
-
-But the real difference is this:
-
-### ✅ The OS boots with “userland available at 0 seconds”
-Instead of booting a VM and then waiting for layers of tooling…
-
-KubeDOS images boot and immediately have:
-- identity
-- automation tooling
-- networking fabric
-- orchestration capability  
-already present.
-
-That means:
-✅ **Ansible and Salt work instantly**  
-✅ **No “waiting for cloud-init”**  
-✅ **No “install dependencies after boot”**  
-✅ **No “pull packages from the internet”** (dark-site safe)
-
-The OS comes out of the foundry ready to converge, in a **single** step.
+KubeDOS is a **foundry** that produces **sealed, portable OS artifacts** that boot with identity + automation + encrypted network planes already present, so a fleet can converge immediately (even in dark sites).
 
 ---
 
-## The Story: Why this exists
+## Why you should care (the value)
 
-This project was born out of the pure joy of learning Kubernetes “the hard way” —
-and the frustration of realizing that most real-world infrastructure is still built like:
+### Lower MTTR (Mean Time To Recovery)
+When a node dies, you do not troubleshoot it at 3AM.
 
-- install an OS  
-- patch it  
-- babysit it  
-- maintain it forever  
-- and pray you can restore it when the underlying host dies
+You redeploy the same artifact and let convergence recreate the desired state.
 
-KubeDOS exists so you can say:
+### Disaster Recovery you can actually practice
+Your DR plan becomes:
 
-> “Cool. That node died. Deploy another one.”
+- “Can I rebuild this environment from a Git commit and a build cache?”
+- “Can I deploy it in a second location with the same artifacts?”
+- “Can I do it **without internet** if needed?”
 
-No panic. No archaeology. No fragile recovery plan.
+KubeDOS is designed to make the answer “yes.”
 
-Just **build → deploy → converge**.
+### Determinism beats drift
+Most stacks drift because provisioning happens *after* boot (and depends on networks, repos, DNS, time, luck).
 
----
-
-## What this example does (Beta-1 demo)
-
-The current example deploys **16 instances**:
-
-- ✅ **1 Master**
-- ✅ **15 Minions**
-
-Each minion is cattle:
-- self-healing
-- replaceable
-- disposable
-- and designed to be “sprayed” anywhere
-
-This demo is intentionally designed to feel like a Kubernetes deployment:
-you launch a fleet and it converges into a working environment.
+KubeDOS bakes the important parts **into the artifact** so the boot path is predictable and repeatable.
 
 ---
 
-## The Two-Part Deployment Model
+## What KubeDOS produces (artifacts)
 
-KubeDOS currently uses a simple two-step process:
+KubeDOS is built around **outputs**, not “machines.”
 
-### **Part 1 — Deploy**
-This phase creates the target fleet:
-- creates VMs
-- pushes images
-- assigns networking
-- boots everything
+This repo currently supports (or scaffolds) outputs like:
 
-It can target:
-- Proxmox over SSH (default)
-- other hypervisors with the right tooling
-- cloud providers via their CLIs
-- Firecracker/Kata via your pipeline
+- **ISO installers** (custom Debian netinst flow)
+- **QCOW2 base images** (Proxmox / QEMU/KVM)
+- **VMDK export** (ESXi path)
+- **AWS AMI import + run** (optional path)
+- **Firecracker bundle** (rootfs/kernel/initrd + helpers)
+- **Packer scaffold** (emit a QEMU template)
 
-### **Part 2 — Converge**
-Once everything is booted, the system applies the platform configuration.
-
-Here’s the key:
-
-✅ **All automation is baked into every image.**
-
-Infrastructure-as-Code isn’t “external glue” — it is a first-class citizen.
-
-So instead of needing 7 external tools…
-your cluster converges using what is already inside the OS artifacts:
-- embedded Ansible
-- embedded Salt
-- embedded scripts and payloads
-- embedded keys + enrollment logic
-- embedded darksite packages (optional)
-
-This is one of the biggest differences vs traditional platforms.
+These are driven by the `TARGET=` modes in `deploy.sh` (see below).
 
 ---
 
-## What makes KubeDOS different from “traditional”
+## The core idea: “Userland at 0 seconds”
 
-### Traditional approach
-- install OS
-- add config tools
-- wait for network
-- wait for DNS
-- wait for repos
-- configure automation tooling
-- push scripts
-- fix drift later
-- repair broken nodes
+KubeDOS artifacts boot with the essential “platform wiring” already available:
 
-### KubeDOS approach
-- build OS artifact once
-- deploy it anywhere
-- boot → converge automatically
-- nodes are disposable cattle
-- replace instead of repair
+- identity + enrollment hooks
+- automation tooling (Ansible/Salt payloads)
+- backplane networking hooks
+- optional offline packages / repo snapshot (darksite mode)
 
----
+So you don’t do the traditional dance:
 
-## The Fabric: encrypted kernel-to-kernel “mind-meld”
+- wait for cloud-init  
+- wait for apt mirrors  
+- install bootstrap tools  
+- hope DNS works  
+- then begin convergence  
 
-By default, KubeDOS sets up multiple **encrypted Layer-3 WireGuard networks**.
-
-Think of it like:
-- Tailscale / NetBird / ZeroTier style connectivity  
-…but implemented as:
-✅ kernel-to-kernel WireGuard  
-✅ no SaaS broker  
-✅ deterministic addressing  
-✅ multiple planes (not just one)
-
-This means every node can become reachable instantly after boot
-even when:
-- there is no DNS
-- there is no external internet
-- the environment is partially broken
-- the fleet spans across clouds
-
-If UDP is reachable, the cluster can become a connected organism.
+Instead: **boot → fabric → converge**.
 
 ---
 
-## No SSH login? Yes — on purpose.
+## Backplanes: “built-in Tailscale/WireGuard” (without the SaaS)
 
-KubeDOS is not a “pet server” platform.
+When people hear “network fabric” they often think “mystery overlay.”
 
-You’re not supposed to SSH into a minion and “fix it”.
+KubeDOS is explicit: it uses **kernel-level WireGuard** planes, similar in outcome to Tailscale/NetBird/ZeroTier connectivity, but:
 
-Instead:
-- you rebuild it
-- or you replace it
+- no SaaS broker
+- no hidden overlay defaults
+- deterministic addressing
+- multiple planes with explicit intent
 
-For observability and enforcement, KubeDOS promotes:
-- **eBPF-first visibility**
-- structured logging
-- deterministic fleet state
-- kill-and-replace behavior
+In this release, the model is **three planes** (interfaces):
 
-It’s a platform designed to *run workloads*, not host fragile interactive shells.
+- `wg1` — control / SSH / automation
+- `wg2` — metrics / observability
+- `wg3` — Kubernetes backend / service-plane plumbing
 
----
+The payload includes tooling to **apply/refresh plane configs** from a seed (`payload/darksite/apply.py`, `cluster-seed/peers.json`) and to gate convergence on plane readiness (`ansible/playbooks/00_fabric_gate.yml`).
 
-## What the Beta-1 platform deploys
-
-This Beta script is intended to bring up a complete cluster foundation including:
-
-✅ etcd cluster  
-✅ control plane nodes  
-✅ worker nodes  
-✅ Cilium + Hubble (CNI / observability)  
-✅ Helm  
-✅ ArgoCD  
-✅ monitoring stack (Prometheus/Grafana)  
-✅ optional LB nodes  
-✅ storage node design (ZFS/Ceph-ready patterns)
-
-In short: it builds the “platform world”, not just a kubernetes installer.
+> If UDP can pass, your fleet can become reachable even when DNS/internet is broken.
 
 ---
 
-## Requirements (what you need to run this)
+## eBPF: why it matters (and why you’ve already seen it)
 
-### You need two things:
+KubeDOS leans into **eBPF-first** networking and observability.
 
-## 1) A Build Server (“Foundry”)
-This is where images are built and payloads are bundled.
+If you’ve used modern monitoring vendors (Datadog is a common example), you’ve already benefited from eBPF-style kernel visibility: low-overhead signals, network flow insight, and deep telemetry without “sidecar hell.”
 
-Recommended:
-- Linux x86_64
-- Fast SSD/NVMe for build cache
-- RAM: 16GB+ recommended
-- Internet access only needed at build time (optional if you have a mirror)
+In this repo, that shows up via:
 
-Must have common tooling:
-- docker or podman
-- xorriso / mkisofs
-- squashfs-tools
-- qemu-img (qemu-utils)
-- openssh-client
-- rsync, curl, tar
+- **Cilium + Hubble** (eBPF dataplane + network visibility)
 
-## 2) A Target (where the fleet runs)
-Targets can be:
-- Proxmox (default example)
-- QEMU/KVM
-- ESXi/vSphere
-- Firecracker/Kata hosts
-- AWS/Azure/GCP
-
-The only requirement is:
-✅ it can boot an image  
-✅ and you can reach it (usually SSH)
+This is not a “nice-to-have.” It’s part of the platform’s **replace-not-repair** posture: you need strong telemetry to confidently kill and replace nodes.
 
 ---
 
-## Quickstart (the friendly way)
+## Two deployment modes: Connected vs Darksite (Airgapped)
 
-## 2) Configure your target access (Proxmox example)
+Most projects hand-wave “airgap support.” KubeDOS makes it an explicit mode.
 
-KubeDOS talks to your target using plain SSH.  
-For the Proxmox example, you want **passwordless SSH** working first.
-it uses standard vm commands, allowing you to add to the base image, ie vlans, disks, ect.
+### 1) Connected mode (fastest iteration)
+Use upstream mirrors during build and/or converge.
 
-### Generate an SSH key (if you don’t already have one)
+Best for:
+- labs
+- fast iteration
+- environments with stable outbound access
+
+### 2) Darksite mode (offline / airgapped)
+Build an **ISO-local APT repo snapshot** and stage it into the installer media (mounted at `/cdrom/darksite/` during install).
+
+Best for:
+- regulated environments
+- disconnected sites
+- “the internet is not allowed” realities
+
+### 3) Both (hybrid)
+Build artifacts that can operate offline but still allow connected mirrors when present.
+
+---
+
+## How to select modes (repo knobs you can actually use)
+
+`deploy.sh` exposes these key controls:
+
+- `REPO_MODE=connected|darksite|both`  
+  Controls whether an ISO-local APT snapshot is built and embedded.
+
+- `REPO_PROFILE=base|base+updates|full`  
+  Controls how much of Debian you snapshot/include.
+
+- `DARKSITE_SRC=/path/to/payload/darksite`  
+  Controls where the darksite payload comes from (defaults to repo-local `payload/darksite` if present).
+
+This is the “linkage” that matters:
+
+- **Connected** = smaller artifacts + dependency on mirrors  
+- **Darksite** = larger artifacts + independence + deterministic installs  
+- **Both** = portable artifacts that survive hostile networks  
+
+---
+
+## Two ways to deploy: KubeDOS-native vs “bring your own IaC”
+
+KubeDOS is intentionally **not** jealous. You can use it as a full pipeline or as an artifact factory.
+
+### Path A — KubeDOS-native deployment (batteries included)
+Use the included `deploy.sh` to build + deploy + converge.
+
+- Default target: **Proxmox over SSH**
+- Uses standard host tooling (`qm`, storage, ISO handling)
+- Intended to be rerunnable and operationally boring
+
+This is the “I want a working platform now” path.
+
+### Path B — Use KubeDOS as an artifact factory (integrates with your stack)
+Use KubeDOS to produce artifacts, then deploy them with:
+
+- Packer (artifact workflows, registries, conversions)
+- Terraform (placement, scaling, multi-site orchestration)
+- Ansible (Proxmox graph control, lifecycle, drift management)
+- your existing CI/CD runner
+
+This is the “I already have an IaC universe” path.
+
+**Key point:** even if *you* place the VMs, the nodes boot with convergence payloads already inside the OS artifact.
+
+---
+
+## Examples: integrating with other IaC tools (real patterns)
+
+### Example 1 — Use KubeDOS to emit a Packer scaffold
+KubeDOS includes a mode to generate a Packer QEMU template:
 
 ```bash
-ssh-keygen -t ed25519 -C "kubedos"
-```
+TARGET=packer-scaffold ./deploy.sh
 
-Just press Enter through the prompts (or set a passphrase if you prefer).
-
-### Copy your key to the Proxmox host
-
-Replace `PROXMOX_HOST` with your Proxmox IP or hostname:
-
-```bash
-ssh-copy-id root@PROXMOX_HOST
-```
-
-✅ After this, you should be able to do:
-
-```bash
-ssh root@PROXMOX_HOST
-```
-
-…and it should **log in without asking for a password**.
-
----
-
-### Recommended: add an SSH config entry (makes life easier)
-
-Create or edit:
-
-```bash
-~/.ssh/config
-```
-
-Add an entry like this:
-
-```sshconfig
-Host proxmox
-  HostName PROXMOX_HOST
-  User root
-  IdentityFile ~/.ssh/id_ed25519
-  IdentitiesOnly yes
-```
-
-Now instead of typing a long hostname every time, you can just do:
-
-```bash
-ssh proxmox
-```
-
-…and your deploy scripts can use the shortcut name `proxmox` as the target.
-
----
-
-## 3) Run the example deploy
-
-This demo deploys **16 total machines**: in two stages
-
-- ✅ **1 master**
-- ✅ **15 minions**
-- ✅ everything prewired for converge (IaC baked into every node)
-
-To deploy the whole environment, you run the deploy script:
-
-```bash
-./deploy.sh
-```
-
-That’s it.
-
-KubeDOS handles:
-- creating the VMs
-- booting the artifacts
-- wiring the fabrics
-- converging the environment
-
----
-
-## About networking in the example
-
-The default demo uses a **/20 network plan**:
-
-✅ **4096 total IPs**
-
-This /20 is split into two halves:
-
-- **8× /24 networks = Blue**
-- **8× /24 networks = Green**
-
-That makes it easy to support:
-
-- ✅ blue/green deployments
-- ✅ canary nodes
-- ✅ rapid rebuilds
-- ✅ full environment cloning
-
-You *can* change the addressing plan — but the default is designed to **just work** for a large lab fleet without needing custom math.
-
----
-
-## Works with your existing tools (Packer, Terraform, etc.)
-
-KubeDOS does **not** fight your existing world.
-
-You can absolutely:
-
-- build artifacts using KubeDOS  
-- deploy them using **Packer**
-- place them with **Terraform**
-- orchestrate them with whatever workflow you already use
-
-The key difference is:
-
-✅ the OS artifacts are consistent  
-✅ the converge payload is built into every image  
-
-So no matter how you launch nodes, they boot ready — and converge reliably.
-
----
-
-## Why this is a big deal (the advantages)
-
-### ✅ Faster disaster recovery
-
-A cluster dying is no longer terrifying.
-
-If AWS goes down:
-
-- boot the same artifacts in Azure
-- converge
-- reattach workloads/state
-
-Your infrastructure becomes portable and replaceable.
-
----
-
-### ✅ Fewer moving parts
-
-No stack of provisioning middleware.
-
-Just:
-
-- a build server
-- a target
-- one script
-
----
-
-### ✅ Better security posture
-
-- WireGuard by default  
-- No third-party control planes  
-- No random overlay defaults  
-- Everything is deterministic and auditable  
-
----
-
-### ✅ Less drift, less pain
-
-- the base OS is a product  
-- nodes are disposable  
-- the platform stays consistent over time  
-
----
-
-## Status: Beta-1
-
-This is a **production-grade beta release** target.
-
-The goal is:
-
-- ✅ build all components  
-- ✅ bring up the full environment  
-- ✅ converge reliably  
-- ✅ safe to rerun  
-- ✅ no deploy script editing required  
-
-If something fails:
-
-- the failure should be actionable  
-- logs should be captured  
-- nodes should be replaceable cleanly  
-
----
-
-## Contributing / Notes
-
-Want to add new workloads?
-
-1. add them to the payload (Ansible/Salt)
-2. rebuild the artifact
-3. deploy fleets
-
-Want different fabrics or planes?
-
-1. edit the networking profile
-2. rebuild
-3. redeploy
-
-Everything starts from the artifact.
-
----
-
-## Motto
-
-> **Build the world. Every time.**
-
-Because if it can’t be rebuilt from nothing, anywhere — it’s already broken.
