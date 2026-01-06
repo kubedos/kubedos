@@ -681,7 +681,7 @@ spec:
         expectRecoveryMinutes: 10
       - name: delete-control-plane
         expectRecoveryMinutes: 20
-
+```
 ### 15.3 Mandatory Validation Constraints
 
 A ClusterSpec is invalid unless:
