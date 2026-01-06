@@ -1,199 +1,360 @@
-# Kubedos — Build Once, Deploy Everywhere
+# Kube'd'OS (kubedOS)
 
-> **A build + deploy system that treats the operating system like a Kubernetes workload.**
-> You don’t “install servers.” You **manufacture sealed OS artifacts** and **replace nodes instead of repairing them**.
+**Kube'd'OS is an atomic, self-deploying clustered platform.**  
+It manufactures a complete, secure, reproducible infrastructure base from raw hardware, hypervisors, or cloud instances — in **one convergent operation**.
 
-KubeDOS exists to deliver **platforms as cattle** across Proxmox, bare metal, microVMs, and (optionally) cloud targets — with a sane security baseline and “quality of life” tooling baked in.
+No hand-built images.  
+No snowflake servers.  
+No vendor control planes.  
+No “day-2” glue scripts.
 
-If you can’t rebuild the same platform from scratch, on demand, you don’t have infrastructure — you have archaeology.
+You boot it — **it builds the world**.
 
-KubeDOS flips the model:
-
-- **Build** a deterministic OS artifact (ISO/QCOW2/etc.)
-- **Deploy** it anywhere
-- **Converge** the platform using tooling already inside the artifact
-- **Replace** broken nodes instead of fixing them
-
-This is an **MTTR tool** first: it turns disaster recovery into “recreate the world” instead of “recover the pets.”
+> **Borg-inspired, Kubernetes-native:** workloads are cattle — **and so are the hosts**.
 
 ---
 
-## What KubeDOS is (in one sentence)
+## What Kube'd'OS Is
 
-KubeDOS is a **foundry** that produces **sealed, portable OS artifacts** that boot with identity + automation + encrypted network planes already present, so a fleet can converge immediately (even in dark sites).
+Kube'd'OS is a **Declarative Cluster Lifecycle Platform** built around a single, uncompromising premise:
 
----
+> **If infrastructure cannot be rebuilt from nothing, anywhere, at any time, it is already broken.**
 
-## Why you should care (the value)
+Kube'd'OS produces a **deployable, atomic platform artifact** — a clean, deterministic foundation that serves as a **reproducible blank canvas** for any workload.
 
-### Lower MTTR (Mean Time To Recovery)
-When a node dies, you do not troubleshoot it at 3AM.
+Deployment and configuration are **intentionally and strictly separated**:
 
-You redeploy the same artifact and let convergence recreate the desired state.
+- **Deployment** manufactures the platform (immutable, deterministic)
+- **Configuration** is layered on top (disposable, environment-specific)
 
-### Disaster Recovery you can actually practice
-Your DR plan becomes:
-
-- “Can I rebuild this environment from a Git commit and a build cache?”
-- “Can I deploy it in a second location with the same artifacts?”
-- “Can I do it **without internet** if needed?”
-
-KubeDOS is designed to make the answer “yes.”
-
-### Determinism beats drift
-Most stacks drift because provisioning happens *after* boot (and depends on networks, repos, DNS, time, luck).
-
-KubeDOS bakes the important parts **into the artifact** so the boot path is predictable and repeatable.
+This separation enables extreme portability, minimal MTTR, and long-term survivability.
 
 ---
 
-## What KubeDOS produces (artifacts)
+## Why “Kube'd'OS”
 
-KubeDOS is built around **outputs**, not “machines.”
+**Kube'd'OS** (kubedOS) is a deliberate name:
 
-This repo currently supports (or scaffolds) outputs like:
+- **Kubernetes** is the reference workload and the integration target
+- **“Borg-like” operational posture**: connectivity, self-healing, and replication behaviors are *platform primitives*, not add-ons
+- The goal is not “a Kubernetes installer” — it’s a **cluster operating system** that can deterministically manufacture **production-grade HA** substrate + workloads.
 
-- **ISO installers** (custom Debian netinst flow)
-- **QCOW2 base images** (Proxmox / QEMU/KVM)
-- **VMDK export** (ESXi path)
-- **AWS AMI import + run** (optional path)
-- **Firecracker bundle** (rootfs/kernel/initrd + helpers)
-- **Packer scaffold** (emit a QEMU template)
-
-These are driven by the `TARGET=` modes in `deploy.sh` (see below).
+A nearby project in spirit is **Talos OS**: immutable, API-driven, Kubernetes-centric.  
+Kube'd'OS shares the “machines are replaceable” ethos — while focusing on **self-deploying cluster artifacts**, **Proxmox-native IaC**, and explicit **backplane networking**.
 
 ---
 
-## The core idea: “Userland at 0 seconds”
+## Atomic by Design
 
-KubeDOS artifacts boot with the essential “platform wiring” already available:
+Kube'd'OS is **atomic**.
 
-- identity + enrollment hooks
-- automation tooling (Ansible/Salt payloads)
-- backplane networking hooks
-- optional offline packages / repo snapshot (darksite mode)
+Each build produces a **complete, self-contained platform artifact** that includes:
 
-So you don’t do the traditional dance:
+- Operating system baseline (minimal, hardened)
+- Kernel configuration and sysctls
+- Secure networking fabric (multi-plane)
+- Identity and trust model
+- Automation backends (Salt + Ansible)
+- Storage primitives (OpenZFS, Ceph)
+- Observability and telemetry (first boot, not day-2)
+- Recovery + rebuild artifacts (time-capsule safe inputs)
 
-- wait for cloud-init
-- wait for apt mirrors
-- install bootstrap tools
-- hope DNS works
-- then begin convergence
+There are **zero external dependencies** required to complete the system after boot.
 
-Instead: **boot → fabric → converge**.
-
----
-
-## Backplanes: “built-in Tailscale/WireGuard” (without the SaaS)
-
-When people hear “network fabric” they often think “mystery overlay.”
-
-KubeDOS is explicit: it uses **kernel-level WireGuard** planes, similar in outcome to Tailscale/NetBird/ZeroTier connectivity, but:
-
-- no SaaS broker
-- no hidden overlay defaults
-- deterministic addressing
-- multiple planes with explicit intent
-
-In this release, the model is **three planes** (interfaces):
-
-- `wg1` — control / SSH / automation
-- `wg2` — metrics / observability
-- `wg3` — Kubernetes backend / service-plane plumbing
-
-The payload includes tooling to **apply/refresh plane configs** from a seed (`payload/darksite/apply.py`, `cluster-seed/peers.json`) and to gate convergence on plane readiness (`ansible/playbooks/00_fabric_gate.yml`).
-
-> If UDP can pass, your fleet can become reachable even when DNS/internet is broken.
-> There is no **limit**  to the number of planes you can add — just extend the tooling and create your own blast radius.
----
-
-## eBPF: why it matters (and why you’ve already seen it)
-
-KubeDOS leans into **eBPF-first** networking and observability.
-
-If you’ve used modern monitoring vendors (Datadog is a common example), you’ve already benefited from eBPF-style kernel visibility: low-overhead signals, network flow insight, and deep telemetry without “sidecar hell.”
-
-In this repo, that shows up via:
-
-- **Cilium + Hubble** (eBPF dataplane + network visibility)
-
-This is not a “nice-to-have.” It’s part of the platform’s **replace-not-repair** posture: you need strong telemetry to confidently kill and replace nodes.
+The platform either exists — or it doesn’t.
 
 ---
 
-## Two deployment modes: Connected vs Darksite (Airgapped)
+## Dark-Site & Time-Capsule Safe
 
-Most projects hand-wave “airgap support.” KubeDOS makes it an explicit mode.
+Kube'd'OS is designed to survive **time**, not just outages.
 
-### 1) Connected mode (fastest iteration)
-Use upstream mirrors during build and/or converge.
+Everything required to rebuild the platform is **baked into the artifact**:
 
-Best for:
-- labs
-- fast iteration
-- environments with stable outbound access
+- All packages
+- All versions
+- All tooling
+- All orchestration logic
 
-### 2) Darksite mode (offline / airgapped)
-Build an **ISO-local APT repo snapshot** and stage it into the installer media (mounted at `/cdrom/darksite/` during install).
+No live repositories.  
+No broken mirrors.  
+No abandoned vendors.  
+No silent dependency drift.
 
-Best for:
-- regulated environments
-- disconnected sites
-- “the internet is not allowed” realities
-- "using cloud providers as bare metal hosts"
+> **If your infrastructure explodes five years from now, you can still redeploy it exactly as it was.**
 
-### 3) Both (hybrid)
-Build artifacts that can operate offline but still allow connected mirrors when present.
+Your **last successful deployment** becomes your **permanent MTTR anchor** — today, tomorrow, and forever.
 
----
-
-## How to select modes (repo knobs you can actually use)
-
-`deploy.sh` exposes these key controls:
-
-- `REPO_MODE=connected|darksite|both`
-  Controls whether an ISO-local APT snapshot is built and embedded.
-
-- `REPO_PROFILE=base|base+updates|full`
-  Controls how much of Debian you snapshot/include.
-
-- `DARKSITE_SRC=/path/to/payload/darksite`
-  Controls where the darksite payload comes from (defaults to repo-local `payload/darksite` if present).
-
-This is the “linkage” that matters:
-
-- **Connected** = smaller artifacts + dependency on mirrors
-- **Darksite** = larger artifacts + independence + deterministic installs + artifacts are included in the image
-- **Both** = portable artifacts that survive hostile networks
+Burn it to USB.  
+Store it in a safe.  
+Walk away.
 
 ---
 
-## Two ways to deploy: KubeDOS-native vs “bring your own IaC”
+## Borg-Like Platform Behavior (Without Vendor Magic)
 
-KubeDOS is intentionally **not** jealous. You can use it as a full pipeline or as an artifact factory.
+Kube'd'OS aims for “Borg-like” outcomes via explicit, auditable mechanisms:
 
-### Path A — KubeDOS-native deployment (batteries included)
-Use the included `deploy.sh` to build + deploy + converge.
+- **Connectivity as a primitive** (encrypted, routed, multi-plane)
+- **Replication as a primitive** (storage + state patterns)
+- **Self-healing as a primitive** (replace, don’t repair)
+- **Determinism as the control plane** (same inputs → same cluster)
 
-- Default target: **Proxmox over SSH**
-- Uses standard host tooling (`qm`, storage, ISO handling)
-- Intended to be rerunnable and operationally boring
+This is *not* “SaaS mesh magic.”
 
-This is the “I want a working platform now” path.
+No Tailscale.  
+No NetBird.  
+No recurring bills.  
+No hidden brokers.
 
-### Path B — Use KubeDOS as an artifact factory (integrates with your stack)
-Use KubeDOS to produce artifacts, then deploy them with:
-
-- Packer (artifact workflows, registries, conversions)
-- Terraform (placement, scaling, multi-site orchestration)
-- Ansible (Proxmox graph control, lifecycle, drift management)
-- your existing CI/CD runner
-
-This is the “I already have an IaC universe” path.
-
-**Key point:** even if *you* place the VMs, the nodes boot with convergence payloads already inside the OS artifact.
-Simply build with KubeDOS, deploy with your tools, then let the platform converge itself.
+And importantly: no accidental “just works” overlays that hide topology.
 
 ---
+
+## Backplanes First (Explicit Planes, Explicit Intent)
+
+All nodes participate in a **WireGuard-based encrypted mesh**, but not as a single flat network.
+
+Kube'd'OS establishes **multiple L3 kernel backplanes** early (first boot), for example:
+
+- **wg1** — control / SSH / Ansible / Salt / CI control
+- **wg2** — metrics / observability / logging transport
+- **wg3** — Kubernetes backend (control-plane + east/west)
+
+Planes are:
+
+- Kernel-level
+- L3 routed
+- Explicitly addressed
+- Services bind to planes intentionally
+
+> **Orchestration runs on top of the planes.**  
+> Planes never “appear later” as a day-2 retrofit.
+
+---
+
+## Kubernetes: Reference Workload, Not the Product
+
+Kube'd'OS is **not a Kubernetes installer**.
+
+It is a **cluster operating system and lifecycle platform**.
+
+Kubernetes is included as a reference workload because it is an excellent proof:
+
+- Networking
+- Identity
+- Storage
+- Automation
+- Observability
+- Upgrade semantics
+- Failure domains
+
+If Kube'd'OS can deterministically manufacture a production-grade, HA Kubernetes cluster, it can manufacture almost anything.
+
+Workloads are replaceable.  
+The platform is permanent.
+
+---
+
+## Kubernetes-Native Networking & Visibility (Cilium + Hubble)
+
+Kube'd'OS treats Kubernetes networking and observability as **first-class platform subsystems**:
+
+- **Cilium** for eBPF-based networking, policy, and service handling
+- **Hubble** for network flow visibility and troubleshooting
+- Built-in monitoring patterns (metrics + logs + traces integration-ready)
+
+The objective is that **every cluster artifact ships with a known-good, inspectable networking posture** — not a bolt-on CNI decision made later under pressure.
+
+---
+
+## Observability Is Infrastructure (Not Optional)
+
+Kube'd'OS treats observability as **infrastructure**, not an add-on.
+
+Included from first boot (platform-level):
+
+- eBPF-based kernel introspection where appropriate
+- Network and system visibility
+- Structured, machine-readable logging
+- Designed for modern stacks (e.g., Prometheus / Grafana / Loki)
+
+If something happens, **you can see it**.  
+If it breaks, **you can prove why**.
+
+---
+
+## Storage as a Platform Primitive
+
+Kube'd'OS integrates storage as a core substrate capability:
+
+- **OpenZFS**
+  - Integrity-first
+  - Snapshots and rollback
+  - Ideal for system and control-plane state anchoring
+
+- **Ceph**
+  - Distributed and fault-tolerant
+  - Designed for stateful workloads and replication
+
+State is protected, portable, and replaceable — not fragile.
+
+---
+
+## Salt + Ansible: Dual-Engine by Design
+
+Kube'd'OS uses both — intentionally.
+
+### Salt (Bootstrap & Control)
+- Secure enrollment
+- Fast discovery
+- Reliable execution
+- Cluster-wide coordination
+
+Salt is used where **speed, identity, and coordination** matter most.
+
+### Ansible (Lifecycle & Post-Config)
+- Declarative
+- Idempotent
+- Auditable
+- Familiar
+
+Ansible is **prebuilt into the platform**: drop playbooks into `/srv/ansible` and they simply exist.
+
+No installers.  
+No agents beyond what the platform chooses.  
+No “curl | bash”.
+
+---
+
+## Substrate-Agnostic, Vendor-Free
+
+Kube'd'OS is intentionally hostile to vendor lock-in.
+
+No:
+- HashiCorp control planes
+- SaaS orchestration layers
+- Embedded vendor telemetry
+- Proprietary networking overlays
+
+Instead, Kube'd'OS produces **golden, agnostic platform artifacts** you control.
+
+If AWS us-east disappears:
+- Use the same artifact on Azure, GCP, or on-prem
+- Boot
+- Deploy
+
+You get the **same platform**, with the same behavior and posture — every time.
+
+The substrate is interchangeable.  
+The platform is not.
+
+---
+
+## The Unit Is the Artifact
+
+Kube'd'OS does not manage machines.
+
+It manufactures **cluster artifacts**.
+
+A cluster is a single deployable object, not a pile of nodes.
+
+**Exact code → exact artifact → exact clone → exact behavior.**
+
+This is the foundation for:
+
+- Rebuilds that are mechanical
+- Recovery that is boring
+- Failure that is survivable
+
+---
+
+## Separation of Deployment and Configuration
+
+This is not optional. It is foundational.
+
+### Deployment (Platform Manufacturing)
+- Immutable
+- Deterministic
+- Auditable
+- Reproducible
+
+### Configuration & Workloads (Layered On Top)
+- Disposable
+- Replaceable
+- Environment-specific
+- Drift-resistant
+
+Rebuilds are normal.  
+Repairs are the exception.
+
+---
+
+## Unmatched MTTR by Construction
+
+Kube'd'OS is designed for catastrophic scenarios, not happy paths:
+
+- Cloud region loss
+- Ransomware
+- Supply-chain compromise
+- Vendor collapse
+- Operator error at scale
+
+With Kube'd'OS:
+
+> **You do not repair infrastructure.  
+> You replace it.**
+
+From total failure to fully operational platform is a predictable, repeatable process — measured in minutes, not days.
+
+---
+
+## Fully Auditable, From the Ground Up
+
+Kube'd'OS does not download mystery artifacts or apply opaque transformations.
+
+The build process is:
+
+- Transparent
+- Auditable
+- Deterministic
+- À-la-carte
+
+It assembles only what is required and delivers a platform that boots **directly into a fully running state**.
+
+No post-install “wizardry.”  
+No secondary provisioning systems.  
+No hidden steps.
+
+---
+
+## Philosophy
+
+- **Platforms are atomic**
+- **Rebuilds are normal**
+- **State is disposable (until explicitly replicated)**
+- **Clusters are the unit of computation**
+- **Security is the default**
+- **Human intervention is a failure mode**
+
+Kube'd'OS manufactures certainty.
+
+---
+
+## Status
+
+Active development.  
+Designed for real-world infrastructure.  
+Built to be destroyed — and rebuilt — forever.
+
+---
+
+## Keywords (for discovery)
+
+Kube'd'OS, kubedOS, Kubernetes, Borg-inspired, Proxmox VE, Ansible, Salt, WireGuard, Cilium, Hubble, eBPF, OpenZFS, Ceph, Prometheus, Grafana, Loki, HA, immutable infrastructure, reproducible infrastructure, dark-site, air-gapped, time-capsule safe, disaster recovery, vendor-free, Talos OS.
+
+---
+
+**Kube'd'OS**  
+*Build the world. Every time.*
 
