@@ -739,8 +739,9 @@ out/
     clusterspec.rendered.yaml
     runbooks.md
     acceptance-report.json
+```
 
-    ## 17. Acceptance Criteria (Definition of Done)
+## 17. Acceptance Criteria (Definition of Done)
 
 A build is **DONE** only if acceptance gates pass and results are recorded.
 
