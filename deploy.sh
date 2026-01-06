@@ -2,6 +2,53 @@
 
 : <<'COMMENT'
 deploy.sh — Kubernetes cluster builder for an entire VM host
+
+Overview
+--------
+This script is a full-cluster deployment tool. Instead of configuring one node
+at a time, it targets the *entire* VM host and builds a complete Kubernetes
+cluster from scratch:
+
+  - Creates the control-plane (master) VM
+  - Creates one or more worker (minion) VMs
+  - Wires them together into a working cluster
+
+It is designed both for:
+  - Fresh deployments (greenfield lab / CKA practice)
+  - Rapid rebuilds after critical errors (wipe and re-create the whole cluster)
+
+Base System
+-----------
+Each VM is built as a clean, reproducible base image. The intent is that any
+configuration tool (kubectl, Ansible, Helm, Argo, etc.) can later layer on
+workloads and policies without fighting “snowflake” hosts.
+
+The base install includes:
+
+  - A hub-and-spoke network layout
+  - Three example point-to-point, Layer-3 WireGuard links
+  - Native encryption between nodes at the network layer
+  - No dependency on external DNS, DHCP, or other userland services
+
+Because the WireGuard fabrics are brought up early and are logically
+separated, every node always has a secure, direct path back to the master.
+
+Motivation
+----------
+The goal is to model “borg-like”, self-healing infrastructure:
+
+  - Nodes are secure by default (encrypted fabrics, minimal exposure)
+  - The cluster can be re-created quickly from a known-good baseline
+  - We treat nodes as replaceable "cattle", not fragile "pets"
+
+Instead of spending hours or days trying to repair a broken cluster, you can
+re-run this script, rebuild all VMs, and be back to a clean, working state in
+minutes.
+
+This makes deploy.sh ideal as:
+  - A teaching and practice tool for CKA preparation
+  - A reference implementation for immutable, reproducible Kubernetes clusters
+  - A starting point for more advanced automation and GitOps workflows
 COMMENT
 
 set -euo pipefail
