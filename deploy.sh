@@ -404,7 +404,7 @@ EOF
 #   darksite  = installer uses ONLY the ISO-embedded repo (true time capsule)
 #   connected = installer uses network mirrors only
 #   both      = installer uses ISO repo first + network mirrors as fallback
-REPO_MODE="${REPO_MODE:-connected}"                    # darksite | connected | both
+REPO_MODE="${REPO_MODE:-darksite}"                    # darksite | connected | both
 
 # Debian release codename + arch
 DEBIAN_CODENAME="${DEBIAN_CODENAME:-trixie}"          # bookworm, trixie, etc
@@ -424,7 +424,7 @@ REPO_PROFILE="${REPO_PROFILE:-full}"                  # base | base+updates | fu
 # connected  = installer + postinstall use internet mirrors
 # darksite   = installer + postinstall prefer local APT repo baked into ISO
 # both       = bake darksite repo into ISO, but allow falling back to mirrors
-APT_MODE="${APT_MODE:-connected}"     # connected|darksite|both
+APT_MODE="${APT_MODE:-darksite}"     # connected|darksite|both
 
 # Which upstream repos should be mirrored into the darksite repo?
 # (applies when APT_MODE=darksite|both)

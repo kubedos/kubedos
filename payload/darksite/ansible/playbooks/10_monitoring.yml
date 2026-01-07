@@ -1,11 +1,18 @@
+---
 - name: Configure Prometheus scrape targets (external VM)
-  hosts: prometheus.unixbox.net
+  hosts: "prometheus:prometheus.unixbox.net"
   become: true
+  gather_facts: true
+  any_errors_fatal: true
+
   roles:
     - prometheus_config
 
-- name: Provision Grafana datasource + default dashboards folder
-  hosts: grafana.unixbox.net
+- name: Provision Grafana datasource + dashboards (external VM)
+  hosts: "grafana:grafana.unixbox.net"
   become: true
+  gather_facts: true
+  any_errors_fatal: true
+
   roles:
     - grafana_provision

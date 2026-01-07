@@ -1,9 +1,9 @@
 ---
-- name: Container runtime (containerd)
+- name: Kubernetes packages
   hosts: "cp:control_plane:workers"
   become: true
   gather_facts: true
   any_errors_fatal: true
 
   roles:
-    - containerd
+    - k8s_packages
