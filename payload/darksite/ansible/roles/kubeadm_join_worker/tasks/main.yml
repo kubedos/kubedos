@@ -1,3 +1,4 @@
+---
 - name: Set effective Kubernetes node IP
   set_fact:
     k8s_node_ip: "{{ k8s_node_ip | default(ansible_default_ipv4.address) }}"

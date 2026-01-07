@@ -1,3 +1,4 @@
+---
 - name: Install helm
   apt:
     name: "{{ helm_version_pkg }}"
