@@ -1,9 +1,5 @@
----
 - name: Kubernetes packages
-  hosts: "cp:control_plane:workers"
+  hosts: control_plane:workers
   become: true
-  gather_facts: true
-  any_errors_fatal: true
-
   roles:
-    - k8s_packages
+    - k8s_pkgs

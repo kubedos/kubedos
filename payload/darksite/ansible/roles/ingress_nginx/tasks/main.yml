@@ -1,4 +1,3 @@
----
 - name: Add ingress-nginx repo
   command: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
   changed_when: false

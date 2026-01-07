@@ -1,9 +1,5 @@
----
-- name: Load balancers (kube-apiserver VIP / HAProxy)
-  hosts: "loadbalancers:lb"
+- name: Load balancers (kube-apiserver)
+  hosts: lb
   become: true
-  gather_facts: true
-  any_errors_fatal: true
-
   roles:
-    - loadbalancer
+    - lb_haproxy

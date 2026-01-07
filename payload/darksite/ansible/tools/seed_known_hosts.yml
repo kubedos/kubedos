@@ -4,8 +4,7 @@
   gather_facts: false
 
   vars:
-    # Inventory hostnames (exclude localhost)
-    seed_hosts: "{{ groups['all'] | difference(['localhost']) | sort }}"
+    known_hosts_path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
 
   tasks:
     - name: Ensure ~/.ssh exists
@@ -14,42 +13,26 @@
         state: directory
         mode: "0700"
 
-    - name: Build scan targets (inventory name + ansible_host fallback)
+    - name: Build list of hostnames to scan (inventory hostnames)
       ansible.builtin.set_fact:
-        scan_targets: >-
-          {{
-            seed_hosts
-            | map('regex_replace', '^(.*)$', '\\1')
-            | map('community.general.dict_kv', 'name')
-            | list
-          }}
-      vars:
-        # avoid requiring extra plugins by rebuilding in next task
-        _noop: true
+        seed_hosts: "{{ groups['all'] | difference(['localhost']) | sort }}"
 
-    - name: Rebuild scan_targets without extra filters/plugins
-      ansible.builtin.set_fact:
-        scan_targets: "{{ scan_targets | default([]) + [ {'name': item, 'addr': (hostvars[item].ansible_host | default(item))} ] }}"
-      loop: "{{ seed_hosts }}"
-
-    - name: Scan host key (ed25519) using name, fallback to addr
+    - name: Scan and add host keys (ed25519 preferred)
       ansible.builtin.shell: |
         set -euo pipefail
-        ssh-keyscan -T 5 -t ed25519 {{ item.name }} 2>/dev/null \
-          || ssh-keyscan -T 5 -t ed25519 {{ item.addr }} 2>/dev/null \
-          || true
+        ssh-keyscan -T 5 -t ed25519 {{ item }} 2>/dev/null
       args:
         executable: /bin/bash
-      register: scan_out
+      loop: "{{ seed_hosts }}"
+      register: scanned
       changed_when: false
-      failed_when: false
-      loop: "{{ scan_targets }}"
 
-    - name: Add scanned keys to known_hosts (only when we got output)
+    - name: Add keys to known_hosts (hashed)
       ansible.builtin.known_hosts:
-        path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
-        name: "{{ item.item.name }}"
-        key: "{{ item.stdout }}"
+        path: "{{ known_hosts_path }}"
+        name: "{{ item.item }}"
+        key: "{{ (item.stdout | trim) }}"
+        hash_host: true
         state: present
-      loop: "{{ scan_out.results }}"
-      when: item.stdout is defined and (item.stdout | length) > 0
+      loop: "{{ scanned.results }}"
+      when: item.stdout is defined and (item.stdout | trim) != ""

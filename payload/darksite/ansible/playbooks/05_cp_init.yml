@@ -1,9 +1,5 @@
----
-- name: Initialize bootstrap control-plane (kubeadm init)
-  hosts: "cp-1.unixbox.net"
+- name: Initialize cp1
+  hosts: cp-1.unixbox.net
   become: true
-  gather_facts: true
-  any_errors_fatal: true
-
   roles:
     - kubeadm_init

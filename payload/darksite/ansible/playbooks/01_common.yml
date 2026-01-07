@@ -1,10 +1,6 @@
----
-- name: Common baseline (hostname + firewall + base packages)
-  hosts: "all:!master:!controller"
+- name: Common baseline (hostname + nftables)
+  hosts: all
   become: true
-  gather_facts: true
-  any_errors_fatal: true
-
   roles:
     - hosts_file
     - hostname_normalize
