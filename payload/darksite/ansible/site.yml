@@ -1,22 +1,30 @@
 ---
+# /srv/ansible/site.yml
+# Canonical run order (safe to rerun): preflight → base → runtime → etcd → k8s → addons → verify
+
 - import_playbook: playbooks/00_preflight.yml
 - import_playbook: playbooks/00_sudoers.yml
 - import_playbook: playbooks/01_apt_repos.yml
 - import_playbook: tools/k8s_repo_manifest.yml
+
 - import_playbook: playbooks/02_common.yml
 - import_playbook: playbooks/03_containerd.yml
 - import_playbook: playbooks/04_k8s_packages.yml
+
 - import_playbook: playbooks/05_etcd_pki.yml
 - import_playbook: playbooks/06_etcd_cluster.yml
+
 - import_playbook: playbooks/07_loadbalancers.yml
+
 - import_playbook: playbooks/08_cp_init.yml
-- import_playbook: playbooks/09_cp_join.yml
-- import_playbook: playbooks/10_workers_join.yml
-- import_playbook: playbooks/20_cilium.yml
-- import_playbook: playbooks/21_ingress_nginx.yml
-- import_playbook: playbooks/30_prometheus.yml
-- import_playbook: playbooks/31_grafana.yml
-- import_playbook: playbooks/40_helm.yml
-- import_playbook: playbooks/41_argocd.yml
+- import_playbook: playbooks/06_cp_join.yml
+- import_playbook: playbooks/07_worker_join.yml
+
+- import_playbook: playbooks/08_cilium.yml
+- import_playbook: playbooks/09_ingress.yml
+- import_playbook: playbooks/10_monitoring.yml
+- import_playbook: playbooks/11_helm.yml
+- import_playbook: playbooks/12_argocd.yml
+
 - import_playbook: playbooks/99_verify.yml
 

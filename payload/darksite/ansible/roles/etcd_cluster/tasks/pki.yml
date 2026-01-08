@@ -1,6 +1,6 @@
 ---
 # Build/Install PKI on each etcd node.
-# This file is intentionally defensive about variable availability.
+# Defensive + idempotent. No external template dependency for the openssl ext file.
 
 - name: Compute etcd bind IP (reuse existing, else etcd_ip, else default route)
   ansible.builtin.set_fact:
@@ -11,6 +11,7 @@
           | default(cluster_underlay_ip, true)
           | default(ansible_default_ipv4.address, true)
       }}
+  changed_when: false
 
 - name: Assert etcd_bind_ip is set
   ansible.builtin.assert:
@@ -24,7 +25,26 @@
     name: openssl
     state: present
 
-# --- Controller-side CA artifacts directory ---
+# --------------------------------------------------------------------
+# PKI ownership assumes systemd runs etcd as User=etcd Group=etcd.
+# This role may run before etcd packages are installed, so create them here.
+# --------------------------------------------------------------------
+- name: Ensure etcd system group exists
+  ansible.builtin.group:
+    name: etcd
+    system: true
+    state: present
+
+- name: Ensure etcd system user exists
+  ansible.builtin.user:
+    name: etcd
+    group: etcd
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+
+# --- Controller-side CA directory ---
 - name: Ensure controller CA artifact directory exists
   ansible.builtin.file:
     path: "{{ etcd_pki_controller_dir }}"
@@ -33,7 +53,6 @@
   delegate_to: localhost
   run_once: true
 
-# --- Ensure CA exists on controller (one CA for the cluster) ---
 - name: Generate CA key if missing
   ansible.builtin.command: >
     openssl genrsa -out {{ etcd_pki_controller_dir }}/ca.key 4096
@@ -63,7 +82,6 @@
     group: "{{ etcd_pki_group }}"
     mode: "{{ etcd_pki_dir_mode }}"
 
-# --- Copy CA artifacts from controller to node (role signs locally using CA key) ---
 - name: Copy CA cert to node
   ansible.builtin.copy:
     src: "{{ etcd_pki_controller_dir }}/ca.crt"
@@ -80,16 +98,6 @@
     group: "{{ etcd_pki_group }}"
     mode: "{{ etcd_pki_key_mode }}"
 
-# --- Build SANs (keep it simple & correct for etcd peer/server) ---
-- name: Build SAN list for this node
-  ansible.builtin.set_fact:
-    etcd_node_sans:
-      - "DNS:{{ inventory_hostname }}"
-      - "DNS:localhost"
-      - "IP:127.0.0.1"
-      - "IP:{{ etcd_bind_ip }}"
-
-# --- Render an OpenSSL ext file for both peer and server certs ---
 - name: Render node OpenSSL extension file (peer/server)
   ansible.builtin.copy:
     dest: "{{ etcd_pki_dir }}/openssl-etcd-ext.cnf"
@@ -106,9 +114,17 @@
       CN = {{ inventory_hostname }}
 
       [ v3_req ]
+      basicConstraints = CA:FALSE
       keyUsage = critical, digitalSignature, keyEncipherment
       extendedKeyUsage = serverAuth, clientAuth
-      subjectAltName = {{ etcd_node_sans | join(',') }}
+      subjectAltName = @alt_names
+
+      [ alt_names ]
+      DNS.1 = {{ inventory_hostname }}
+      DNS.2 = localhost
+      IP.1  = 127.0.0.1
+      IP.2  = {{ etcd_bind_ip }}
+      IP.3  = {{ ansible_default_ipv4.address }}
 
 # --- Peer cert/key ---
 - name: Generate peer private key if missing
@@ -170,7 +186,6 @@
   args:
     creates: "{{ etcd_pki_dir }}/server.crt"
 
-# --- Permissions: make sure User=etcd can read ---
 - name: Tighten permissions on generated private keys and certs
   ansible.builtin.file:
     path: "{{ item.path }}"
