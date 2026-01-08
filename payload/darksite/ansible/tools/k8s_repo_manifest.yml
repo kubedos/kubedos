@@ -5,9 +5,8 @@
   gather_facts: false
 
   vars:
-    # DO NOT self-reference. Use *_effective vars only.
     k8s_minor_repo_effective: "{{ (k8s_minor_repo is defined) | ternary(k8s_minor_repo, 'v1.35') }}"
-    k8s_repo_url_effective: "{{ (k8s_repo_url is defined) | ternary(k8s_repo_url, 'https://pkgs.k8s.io/core:/stable:/' ~ k8s_minor_repo_effective ~ '/deb/') }}"
+    k8s_repo_url_effective: "{{ (k8s_repo_url is defined) | ternary(k8s_repo_url, ('https://pkgs.k8s.io/core:/stable:/' ~ k8s_minor_repo_effective ~ '/deb/')) }}"
     manifest_path_effective: "{{ (manifest_path is defined) | ternary(manifest_path, '/srv/ansible/group_vars/all/k8s_versions.yml') }}"
 
     k8s_key_tmp: /tmp/kubernetes-Release.key
@@ -15,6 +14,42 @@
     k8s_list: /etc/apt/sources.list.d/kubernetes.list
 
   tasks:
+    - name: Ensure apt keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Stat existing kubernetes.list and keyring
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ k8s_list }}"
+        - "{{ k8s_keyring }}"
+      register: _k8s_stat
+
+    - name: Set facts from stat results
+      ansible.builtin.set_fact:
+        _k8s_list_exists: "{{ (_k8s_stat.results | selectattr('item','equalto',k8s_list) | first).stat.exists }}"
+        _k8s_keyring_exists: "{{ (_k8s_stat.results | selectattr('item','equalto',k8s_keyring) | first).stat.exists }}"
+      changed_when: false
+
+    - name: Remove kubernetes.list if keyring is missing (prevents apt update failure)
+      ansible.builtin.file:
+        path: "{{ k8s_list }}"
+        state: absent
+      when: _k8s_list_exists and (not _k8s_keyring_exists)
+
+    - name: Apt update (show real errors)
+      ansible.builtin.command: bash -lc "DEBIAN_FRONTEND=noninteractive apt-get update"
+      args:
+        executable: /bin/bash
+      register: _apt_update_pre
+      changed_when: false
+      retries: 5
+      delay: 3
+      until: _apt_update_pre.rc == 0
+
     - name: Ensure baseline tooling for repo bootstrap
       ansible.builtin.apt:
         name:
@@ -22,14 +57,7 @@
           - curl
           - gnupg
         state: present
-        update_cache: true
-      check_mode: no
-
-    - name: Ensure apt keyrings directory exists
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
+        update_cache: false
 
     - name: Fetch Kubernetes repo Release.key
       ansible.builtin.get_url:
@@ -37,13 +65,25 @@
         dest: "{{ k8s_key_tmp }}"
         mode: "0644"
         force: true
-      check_mode: no
 
-    - name: Dearmor Kubernetes key into keyring
-      ansible.builtin.command: >
-        bash -lc "gpg --dearmor -o {{ k8s_keyring }} {{ k8s_key_tmp }} && chmod 0644 {{ k8s_keyring }}"
-      changed_when: true
-      check_mode: no
+    - name: Dearmor Kubernetes key into keyring (non-interactive, idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmp="$(mktemp)"
+        gpg --dearmor --batch --yes --no-tty -o "$tmp" "{{ k8s_key_tmp }}"
+        chmod 0644 "$tmp"
+        if [ -f "{{ k8s_keyring }}" ] && cmp -s "$tmp" "{{ k8s_keyring }}"; then
+          rm -f "$tmp"
+          echo "unchanged"
+        else
+          install -m 0644 "$tmp" "{{ k8s_keyring }}"
+          rm -f "$tmp"
+          echo "updated"
+        fi
+      args:
+        executable: /bin/bash
+      register: _k8s_keyring_update
+      changed_when: "'updated' in _k8s_keyring_update.stdout"
 
     - name: Install Kubernetes apt source list
       ansible.builtin.copy:
@@ -51,28 +91,25 @@
         mode: "0644"
         content: |
           deb [signed-by={{ k8s_keyring }}] {{ k8s_repo_url_effective }} /
-      check_mode: no
 
-    - name: Apt update (capture output)
-      ansible.builtin.command: bash -lc "apt-get update"
-      register: _apt_update
+    - name: Apt update after adding Kubernetes repo (show real errors)
+      ansible.builtin.command: bash -lc "DEBIAN_FRONTEND=noninteractive apt-get update"
+      args:
+        executable: /bin/bash
+      register: _apt_update_post
       changed_when: false
-      check_mode: no
 
-    - name: Fail loudly if Kubernetes repo is not usable (trust/DNS/TLS)
+    - name: Fail loudly if Kubernetes repo is not usable
       ansible.builtin.fail:
         msg: |
           Kubernetes repo not usable on {{ inventory_hostname }}.
           Repo: {{ k8s_repo_url_effective }}
           apt-get update output:
-          {{ _apt_update.stdout | default('') }}
-          {{ _apt_update.stderr | default('') }}
-      when: >
-        (_apt_update.stdout is search('NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake|Certificate', ignorecase=True))
-        or
-        (_apt_update.stderr is search('NO_PUBKEY|EXPKEYSIG|not signed|signatures were invalid|Could not resolve|TLS|Handshake|Certificate', ignorecase=True))
+          {{ _apt_update_post.stdout | default('') }}
+          {{ _apt_update_post.stderr | default('') }}
+      when: _apt_update_post.rc != 0
 
-    - name: Resolve newest deb versions from apt (run once, on cp-1)
+    - name: Resolve newest deb versions from apt (run once, on first CP)
       ansible.builtin.shell: |
         set -euo pipefail
         kubelet="$(apt-cache madison kubelet | awk '{print $3}' | head -n1)"
@@ -83,46 +120,27 @@
         echo "kubectl=${kubectl}"
       args:
         executable: /bin/bash
-      register: _deb_versions
-      run_once: true
-      delegate_to: "{{ groups['cp'][0] }}"
+      register: _k8s_madison
       changed_when: false
-      check_mode: no
+      run_once: true
+      delegate_to: "{{ (groups['cp'] | default([]) | first) | default(inventory_hostname) }}"
 
-    - name: Set manifest facts (run once)
+    - name: Parse versions from apt-cache output (controller fact)
       ansible.builtin.set_fact:
-        _kubelet_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubelet=') | first).split('=',1)[1] }}"
-        _kubeadm_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubeadm=') | first).split('=',1)[1] }}"
-        _kubectl_ver: "{{ (_deb_versions.stdout_lines | select('match','^kubectl=') | first).split('=',1)[1] }}"
-        _k8s_semver: "{{ (_deb_versions.stdout_lines | select('match','^kubelet=') | first).split('=',1)[1].split('-',1)[0] }}"
-        _ts: "{{ lookup('pipe', 'date -Is') }}"
+        _kubelet_ver: "{{ (_k8s_madison.stdout_lines | select('match','^kubelet=') | first | regex_replace('^kubelet=','')) }}"
+        _kubeadm_ver: "{{ (_k8s_madison.stdout_lines | select('match','^kubeadm=') | first | regex_replace('^kubeadm=','')) }}"
+        _kubectl_ver: "{{ (_k8s_madison.stdout_lines | select('match','^kubectl=') | first | regex_replace('^kubectl=','')) }}"
+        _k8s_semver: "{{ ((_k8s_madison.stdout_lines | select('match','^kubeadm=') | first | regex_replace('^kubeadm=','')) | regex_replace('-.*$','')) }}"
+      changed_when: false
       run_once: true
+      delegate_to: localhost
 
-    - name: Print picked versions (run once)
-      ansible.builtin.debug:
-        msg:
-          - "Repo:    {{ k8s_repo_url_effective }}"
-          - "kubelet: {{ _kubelet_ver }}"
-          - "kubeadm: {{ _kubeadm_ver }}"
-          - "kubectl: {{ _kubectl_ver }}"
-          - "semver:  {{ _k8s_semver }}"
-          - "write:   {{ manifest_path_effective }}"
-      run_once: true
-
-    - name: Write manifest on controller (commit this)
+    - name: Write k8s deb version manifest for deterministic installs
       ansible.builtin.copy:
         dest: "{{ manifest_path_effective }}"
         mode: "0644"
         content: |
-          ---
-          # Generated {{ _ts }}
-          # Source: {{ k8s_repo_url_effective }}
-          #
-          # Re-generate:
-          #   ansible-playbook -i inventory/hosts.ini tools/k8s_repo_manifest.yml --become
-          #
-          # Deterministic pins for Kubernetes deb installs.
-
+          # Auto-generated by tools/k8s_repo_manifest.yml
           k8s_minor_repo: "{{ k8s_minor_repo_effective }}"
           k8s_repo_url: "{{ k8s_repo_url_effective }}"
 
@@ -135,3 +153,4 @@
       delegate_to: localhost
       run_once: true
       become: false
+
