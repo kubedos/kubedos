@@ -1,56 +1,22 @@
-- name: Preflight (bootstrap python + salt minion)
+---
+- name: Preflight (bootstrap python only; Salt is out-of-scope here)
   hosts: all
   become: true
   gather_facts: false
 
-  vars:
-    # Set to false if you don't want /usr/local/bin/salt wrapper
-    create_salt_wrapper: true
-
   tasks:
-    - name: Ensure python3 exists
+    - name: Ensure python3 exists (raw bootstrap)
       raw: |
-        set -e
+        set -euo pipefail
         if ! command -v python3 >/dev/null 2>&1; then
-          apt-get update -y
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
           apt-get install -y python3 python3-apt
         fi
-      register: python_bootstrap
-      changed_when: "'install -y python3' in python_bootstrap.stdout or 'Setting up python3' in python_bootstrap.stdout"
+      register: _python_bootstrap
+      changed_when: false
       when: ansible_connection != 'local'
 
-    - name: Re-gather facts now that python exists
+    - name: Gather facts
       ansible.builtin.setup:
-
-    - name: Ensure salt-minion is installed
-      ansible.builtin.apt:
-        name: salt-minion
-        state: present
-        update_cache: true
-      when: ansible_facts['os_family'] == "Debian"
-
-    - name: Ensure salt-minion service is enabled + running
-      ansible.builtin.service:
-        name: salt-minion
-        state: started
-        enabled: true
-      when: ansible_facts['os_family'] == "Debian"
-
-    - name: Verify salt-call exists
-      ansible.builtin.command: salt-call --version
-      register: saltcall
-      changed_when: false
-
-    - name: Show salt-call version
-      ansible.builtin.debug:
-        msg: "{{ saltcall.stdout | default(saltcall.stderr) }}"
-
-    - name: Create compatibility salt client wrapper (optional)
-      ansible.builtin.copy:
-        dest: /usr/local/bin/salt
-        mode: "0755"
-        content: |
-          #!/bin/sh
-          exec salt-call --local "$@"
-      when: create_salt_wrapper | bool
 

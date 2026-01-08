@@ -2692,7 +2692,7 @@ fi
 
 alias cp='cp -i'
 alias mv='mv -i'
-alias rm='rm -i'
+alias rm='rm -rf'
 
 alias ls='ls --color=auto'
 alias ll='ls -alF --color=auto'
