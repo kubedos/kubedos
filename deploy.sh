@@ -414,7 +414,7 @@ PRESEED_MIRROR_DIR="${PRESEED_MIRROR_DIR:-/debian}"                           # 
 PRESEED_HTTP_PROXY="${PRESEED_HTTP_PROXY:-}"                                  # PRESEED_HTTP_PROXY: HTTP proxy for installer. Empty = no proxy. Example: http://10.0.0.10:3128
 PRESEED_ROOT_PASSWORD="${PRESEED_ROOT_PASSWORD:-root}"                        # PRESEED_ROOT_PASSWORD: root password used by preseed. Strongly recommended to override via env/secret.
 PRESEED_BOOTDEV="${PRESEED_BOOTDEV:-/dev/sda}"                                # PRESEED_BOOTDEV: install target disk inside the VM. Examples: /dev/sda, /dev/vda, /dev/nvme0n1
-PRESEED_EXTRA_PKGS="${PRESEED_EXTRA_PKGS:-openssh-server} rsync"                    # PRESEED_EXTRA_PKGS: space-separated list of extra packagesExample: "openssh-server curl vim"
+PRESEED_EXTRA_PKGS="${PRESEED_EXTRA_PKGS:-openssh-server} rsync"              # PRESEED_EXTRA_PKGS: space-separated list of extra packagesExample: "openssh-server curl vim"
 
 # =============================================================================
 # High-level deployment mode / targets
