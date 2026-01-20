@@ -71,8 +71,9 @@
         if ((k8s_minor_repo | default('') | trim) != "")
         else
         (
-          'v' ~ ((hostvars[k8s_fact_host]['k8s_semver_resolved'] | default('') ).split('.')[0]) ~
-          '.' ~ ((hostvars[k8s_fact_host]['k8s_semver_resolved'] | default('') ).split('.')[1])
+          'v' ~ (hostvars[k8s_fact_host]['k8s_semver_resolved'] | default('')
+                | regex_replace('^v','')
+                | regex_replace('^([0-9]+\.[0-9]+).*','\1'))
         )
       }}
     k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/{{ hostvars[k8s_fact_host]['k8s_minor_repo_resolved'] }}/deb/"

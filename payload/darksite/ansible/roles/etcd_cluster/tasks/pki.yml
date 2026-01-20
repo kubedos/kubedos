@@ -8,7 +8,7 @@
       {{
         etcd_bind_ip
           | default(etcd_ip, true)
-          | default(cluster_underlay_ip, true)
+          | default(underlay_ip, true)
           | default(ansible_default_ipv4.address, true)
       }}
   changed_when: false

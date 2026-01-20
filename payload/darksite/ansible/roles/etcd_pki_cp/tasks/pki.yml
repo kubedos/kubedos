@@ -2,13 +2,13 @@
 # etcd PKI (OpenSSL, deterministic)
 # - CA generated once on first etcd node, then distributed
 # - Per-node peer + server certs include SANs for:
-#   - etcd_bind_ip (etcd_ip preferred, fallback cluster_underlay_ip)
+#   - etcd_bind_ip (etcd_ip preferred, fallback underlay_ip)
 #   - 127.0.0.1
 #   - inventory hostname + shortname
 
 - name: Compute etcd bind IP (must match SANs + etcd.conf.yml)
   ansible.builtin.set_fact:
-    etcd_bind_ip: "{{ etcd_ip | default(cluster_underlay_ip) }}"
+    etcd_bind_ip: "{{ etcd_ip | default(underlay_ip) }}"
 
 - name: Ensure etcd PKI dir exists
   ansible.builtin.file:

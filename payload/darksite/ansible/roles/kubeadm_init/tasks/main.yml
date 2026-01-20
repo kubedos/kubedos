@@ -15,7 +15,7 @@
 - name: Set effective Kubernetes IPs
   ansible.builtin.set_fact:
     # Node IP used for advertiseAddress + kubelet node-ip.
-    k8s_node_ip: "{{ k8s_node_ip | default(k8s_node_ip_default | default(ansible_default_ipv4.address)) }}"
+    k8s_node_ip: "{{ k8s_node_ip | default(underlay_ip | default(k8s_node_ip_default | default(ansible_default_ipv4.address))) }}"
     # API endpoint (VIP) used for controlPlaneEndpoint in kubeadm config.
     # Order: explicit var → first LB node IP → this node IP.
     k8s_api_endpoint: >-

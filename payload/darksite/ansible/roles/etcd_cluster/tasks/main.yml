@@ -21,14 +21,13 @@
 
 - name: Compute etcd bind IP (prefer etcd_ip)
   ansible.builtin.set_fact:
-    etcd_bind_ip: "{{ etcd_ip | default(cluster_underlay_ip) | default(ansible_default_ipv4.address) }}"
-
+    etcd_bind_ip: "{{ etcd_ip | default(underlay_ip | default(ansible_default_ipv4.address), true) }}"
 - name: Assert etcd_bind_ip is set
   ansible.builtin.assert:
     that:
       - (etcd_bind_ip | string | trim) != ""
     fail_msg: >-
-      etcd_bind_ip empty. Define etcd_ip per host (recommended), or cluster_underlay_ip.
+      etcd_bind_ip empty. Define etcd_ip per host (recommended), or underlay_ip.
 
 # Build initial-cluster from inventory using etcd_ip (preferred) per host.
 # IMPORTANT: store this fact on localhost using delegate_facts so all hosts can reference it.
@@ -38,7 +37,7 @@
       {%- set parts = [] -%}
       {%- for h in (groups['etcd'] | sort) -%}
       {%- set ip = (hostvars[h].etcd_ip
-                    | default(hostvars[h].cluster_underlay_ip
+                    | default(hostvars[h].underlay_ip
                     | default(hostvars[h].ansible_default_ipv4.address))) -%}
       {%- if (ip | string | trim) != '' -%}
       {%-   set _ = parts.append(h ~ '=https://' ~ ip ~ ':2380') -%}
@@ -54,7 +53,7 @@
     that:
       - (hostvars['localhost']['etcd_initial_cluster'] | default('') | trim) != ""
     fail_msg: >-
-      etcd_initial_cluster could not be computed. Ensure each etcd host has etcd_ip or cluster_underlay_ip.
+      etcd_initial_cluster could not be computed. Ensure each etcd host has etcd_ip or underlay_ip.
 
 - name: Set etcd cluster vars on all nodes
   ansible.builtin.set_fact:
