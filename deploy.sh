@@ -993,30 +993,6 @@ boot_from_disk() {
   pmx_wait_for_state "$vmid" "running" 600
 }
 
-seed_tmux_conf() {
-  : "${ADMIN_USER:=todd}"
-  : "${TMUX_CONF:=/etc/skel/.tmux.conf}"
-
-  log "Writing tmux config to ${TMUX_CONF}"
-  install -d -m0755 "$(dirname "$TMUX_CONF")"
-
-  cat >"$TMUX_CONF" <<'EOF'
-set -g mouse on
-set -g history-limit 100000
-setw -g mode-keys vi
-bind -n C-Space copy-mode
-EOF
-
-  # Copy to root and admin user if they exist
-  if id root >/dev/null 2>&1; then
-    cp -f "$TMUX_CONF" /root/.tmux.conf
-  fi
-  if id "$ADMIN_USER" >/dev/null 2>&1; then
-    cp -f "$TMUX_CONF" "/home/${ADMIN_USER}/.tmux.conf"
-    chown "${ADMIN_USER}:${ADMIN_USER}" "/home/${ADMIN_USER}/.tmux.conf"
-  fi
-}
-
 # =============================================================================
 # ISO BUILDER
 # =============================================================================
