@@ -543,7 +543,6 @@ ALLOW_ADMIN_PASSWORD="${ALLOW_ADMIN_PASSWORD:-${ALLOW_TODD_PASSWORD:-no}}"    # 
 
 GUI_PROFILE="${GUI_PROFILE:-server}"                                          # GUI_PROFILE: what kind of GUI to install (if any). (server|gnome|minimal)
 INSTALL_ANSIBLE="${INSTALL_ANSIBLE:-yes}"                                     # INSTALL_ANSIBLE: whether to install Ansible on master (yes|no).
-INSTALL_SEMAPHORE="${INSTALL_SEMAPHORE:-no}"                                  # INSTALL_SEMAPHORE: yes | try | no
 TMUX_CONF="${TMUX_CONF:-/etc/skel/.tmux.conf}"
 
 # =============================================================================
@@ -1150,7 +1149,6 @@ EOF
     echo "WG2_PORT=${WG2_PORT}"
     echo "WG3_PORT=${WG3_PORT}"
     echo "INSTALL_ANSIBLE=${INSTALL_ANSIBLE}"
-    echo "INSTALL_SEMAPHORE=${INSTALL_SEMAPHORE}"
     echo "REPO_MODE=${REPO_MODE}"
     echo "DEBIAN_CODENAME=${DEBIAN_CODENAME}"
   } >"$dark/99-provision.conf"
@@ -1478,7 +1476,6 @@ ADMIN_USER="${ADMIN_USER:-todd}"
 ALLOW_ADMIN_PASSWORD="${ALLOW_ADMIN_PASSWORD:-no}"
 
 INSTALL_ANSIBLE="${INSTALL_ANSIBLE:-yes}"
-INSTALL_SEMAPHORE="${INSTALL_SEMAPHORE:-yes}"   # yes|try|no
 
 HUB_NAME="${HUB_NAME:-master}"
 
@@ -1993,67 +1990,6 @@ EOF
   systemctl enable --now salt-master salt-api || true
 
   if [ "${INSTALL_ANSIBLE}" = "yes" ]; then apt-get install -y ansible || true; fi
-
-  if [ "${INSTALL_SEMAPHORE}" != "no" ]; then
-    install -d -m755 /etc/semaphore
-    if curl -fsSL -o /usr/local/bin/semaphore https://github.com/ansible-semaphore/semaphore/releases/latest/download/semaphore_linux_amd64 2>/dev/null; then
-      chmod +x /usr/local/bin/semaphore
-      cat >/etc/systemd/system/semaphore.service <<'EOF'
-[Unit]
-Description=Ansible Semaphore
-After=wg-quick@wg0.service network-online.target
-Wants=wg-quick@wg0.service
-[Service]
-ExecStart=/usr/local/bin/semaphore server --listen 10.77.0.1:3000
-Restart=always
-User=root
-[Install]
-WantedBy=multi-user.target
-EOF
-      systemctl daemon-reload; systemctl enable --now semaphore || true
-    else
-      echo "[WARN] Semaphore binary not fetched; install later." >&2
-    fi
-  fi
-}
-
-desktop_gui() {  # unchanged
-  case "${GUI_PROFILE}" in
-    rdp-minimal)
-      apt-get install -y --no-install-recommends xorg xrdp xorgxrdp openbox xterm firefox-esr || true
-      if [[ -f /etc/xrdp/xrdp.ini ]]; then
-        sed -i 's/^\s*port\s*=.*/; &/' /etc/xrdp/xrdp.ini || true
-        if grep -qE '^\s*address=' /etc/xrdp/xrdp.ini; then
-          sed -i "s|^\s*address=.*|address=${MASTER_LAN}|" /etc/xrdp/xrdp.ini
-        else
-          sed -i "1i address=${MASTER_LAN}" /etc/xrdp/xrdp.ini
-        fi
-        if grep -qE '^\s*;port=' /etc/xrdp/xrdp.ini; then
-          sed -i 's|^\s*;port=.*|port=3389|' /etc/xrdp/xrdp.ini
-        elif grep -qE '^\s*port=' /etc/xrdp/xrdp.ini; then
-          sed -i 's|^\s*port=.*|port=3389|' /etc/xrdp/xrdp.ini
-        else
-          sed -i '1i port=3389' /etc/xrdp/xrdp.ini
-        fi
-      fi
-      cat >/etc/xrdp/startwm.sh <<'EOSH'
-#!/bin/sh
-export DESKTOP_SESSION=openbox
-export XDG_SESSION_DESKTOP=openbox
-export XDG_CURRENT_DESKTOP=openbox
-[ -x /usr/bin/openbox-session ] && exec /usr/bin/openbox-session
-[ -x /usr/bin/openbox ] && exec /usr/bin/openbox
-exec /usr/bin/xterm
-EOSH
-      chmod +x /etc/xrdp/startwm.sh
-      systemctl daemon-reload || true
-      systemctl enable --now xrdp || true
-      ;;
-    wayland-gdm-minimal)
-      apt-get install -y --no-install-recommends gdm3 gnome-shell gnome-session-bin firefox-esr || true
-      systemctl enable --now gdm3 || true
-      ;;
-  esac
 }
 
 # -----------------------------------------------------------------------------
@@ -3222,7 +3158,6 @@ main_master() {
   salt_master_stack
   telemetry_stack
   control_stack
-  desktop_gui
   install_wg_refresh_tool
   configure_salt_master_network
   configure_nftables_master
