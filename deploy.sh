@@ -1553,6 +1553,9 @@ ensure_users(){
   install -m0644 /home/ansible/.ssh/id_ed25519.pub /home/ansible/.ssh/authorized_keys
   chown ansible:ansible /home/ansible/.ssh/authorized_keys
   chmod 600 /home/ansible/.ssh/authorized_keys
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible/cp
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible/tmp
   cat >/etc/sudoers.d/90-ansible <<'EOF'
 ansible ALL=(ALL) NOPASSWD:ALL
 EOF
@@ -3413,6 +3416,30 @@ ensure_admin_user() {
   chmod 0440 "/etc/sudoers.d/90-${ADMIN_USER}"
 }
 
+ensure_ansible_user() {
+  # Ensure ansible service user exists
+  id -u ansible >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo ansible
+
+  # Ensure ssh directory exists (keys are typically injected later; keep file present)
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ssh
+  touch /home/ansible/.ssh/authorized_keys
+  chown ansible:ansible /home/ansible/.ssh/authorized_keys
+  chmod 0600 /home/ansible/.ssh/authorized_keys
+
+  # Ensure Ansible ControlPath directory exists
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible/cp
+  install -d -m0700 -o ansible -g ansible /home/ansible/.ansible/tmp
+
+  # Sudoers like the admin user (NOPASSWD)
+  install -d -m0755 /etc/sudoers.d
+  cat >/etc/sudoers.d/90-ansible <<'EOF'
+ansible ALL=(ALL) NOPASSWD:ALL
+EOF
+  chmod 0440 /etc/sudoers.d/90-ansible
+  visudo -c >/dev/null
+}
+
 # =============================================================================
 # SSH HARDENING
 # =============================================================================
@@ -4202,6 +4229,7 @@ main() {
 
   ensure_base
   ensure_admin_user
+  ensure_ansible_user
   install_enroll_key
   ssh_hardening_static
   read_hub
