@@ -2334,69 +2334,6 @@ EOF_WG_REFRESH_PY
   log "wg-refresh-planes installed (Python tool + darksite copy)"
 }
 
-ansible_stack() {
-  if [ "${INSTALL_ANSIBLE}" != "yes" ]; then
-    log "INSTALL_ANSIBLE != yes; skipping Ansible stack"
-    return 0
-  fi
-
-  log "Installing Ansible and base config"
-  apt-get install -y --no-install-recommends ansible || true
-
-  install -d -m0755 /etc/ansible
-
-  cat >/etc/ansible/ansible.cfg <<EOF
-[defaults]
-inventory = /etc/ansible/hosts
-host_key_checking = False
-forks = 50
-timeout = 30
-remote_user = ansible
-# We'll use WireGuard plane (wg1) IPs for ansible_host where possible.
-EOF
-
-  touch /etc/ansible/hosts
-}
-
-semaphore_stack() {
-  if [ "${INSTALL_SEMAPHORE}" = "no" ]; then
-    log "INSTALL_SEMAPHORE=no; skipping Semaphore"
-    return 0
-  fi
-
-  log "Installing Semaphore (Ansible UI) - best effort"
-
-  local WG1_ADDR
-  WG1_ADDR="$(echo "$WG1_IP" | cut -d/ -f1)"
-
-  install -d -m755 /etc/semaphore
-
-  if curl -fsSL -o /usr/local/bin/semaphore \
-      https://github.com/ansible-semaphore/semaphore/releases/latest/download/semaphore_linux_amd64; then
-    chmod +x /usr/local/bin/semaphore
-
-    cat >/etc/systemd/system/semaphore.service <<EOF
-[Unit]
-Description=Ansible Semaphore
-After=wg-quick@wg1.service network-online.target
-Wants=wg-quick@wg1.service network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/semaphore server --listen ${WG1_ADDR}:3000
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable --now semaphore || true
-  else
-    log "WARNING: Failed to fetch Semaphore binary; skipping UI."
-  fi
-}
-
 hub_seed() {
   log "Seeding /srv/wg/hub.env with master WireGuard metadata"
 
@@ -3249,6 +3186,17 @@ post_darksite_to_srv_and_apply() {
       warn "No $src_ansible found; skipping ansible stage"
     fi
   fi
+    # Ensure ansible user can read/write everything under /srv/ansible
+    if id -u ansible >/dev/null 2>&1; then
+      log "Fixing ownership on $dst_ansible -> ansible:ansible"
+      chown -R ansible:ansible "$dst_ansible"
+
+      # Make sure dirs are searchable, and files readable
+      find "$dst_ansible" -type d -exec chmod 0755 {} \; || true
+      find "$dst_ansible" -type f -exec chmod 0644 {} \; || true
+    else
+      warn "ansible user missing; cannot chown $dst_ansible"
+    fi
 
   # Stage darksite helper scripts into /srv/darksite
   log "Staging darksite helper scripts -> $dst_darksite"
@@ -3276,8 +3224,6 @@ main_master() {
   control_stack
   desktop_gui
   install_wg_refresh_tool
-  ansible_stack
-  semaphore_stack
   configure_salt_master_network
   configure_nftables_master
   write_bashrc
