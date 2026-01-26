@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ###############################################################################
-# kubedOS — what it is, how it works, and why it’s different
+# What it is, how it works, and why it’s different?
 #
 # kubedOS treats an entire Kubernetes platform as a *single deployable object*:
 #
