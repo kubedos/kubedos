@@ -83,7 +83,6 @@ sscp() { scp -q -o BatchMode=yes -o ConnectTimeout=6 -o UserKnownHostsFile="$KNO
 
 # =============================================================================
 # DARKSITE APT REPO BUILD HELPERS
-# Inserted: deploy.sh @ line 22
 # =============================================================================
 
 # Upstream mirrors used when connected (and for darksite dependency resolution)
