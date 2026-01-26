@@ -1,5 +1,221 @@
 #!/usr/bin/env bash
 
+###############################################################################
+# kubedOS — what it is, how it works, and why it’s different
+#
+# kubedOS treats an entire Kubernetes platform as a *single deployable object*:
+#
+#   OS + payload + topology  →  one deterministic cluster artifact
+#
+# It is NOT:
+#   - a pile of VMs you SSH into and fix
+#   - a snowflake cluster maintained by hand
+#
+# It IS:
+#   - a repeatable platform unit
+#   - stamped onto Proxmox
+#   - that self-assembles on first boot (t=0)
+#
+###############################################################################
+#
+# THE BIG IDEA
+# ------------
+# The cluster itself is the artifact.
+#
+# Inputs:
+#   - installer ISOs (Debian + preseed)
+#   - embedded payload ("darksite")
+#   - explicit topology (VMIDs, IPs, roles)
+#
+# Output:
+#   - a deterministic Kubernetes platform
+#   - identical inputs produce identical results
+#
+# Repair is usually:
+#   - destroy + redeploy
+#   NOT:
+#   - SSH into a broken VM and patch it live
+#
+###############################################################################
+#
+# PROXMOX IS THE SUBSTRATE CONTROL PLANE
+# ------------------------------------
+# VM lifecycle is owned entirely by Proxmox and driven by code:
+#
+#   qm destroy / qm create / qm set / qm start
+#
+# This guarantees:
+#   - reproducible VMIDs and hostnames
+#   - deterministic CPU, memory, storage
+#   - explicit firmware (UEFI), Secure Boot, TPM2
+#   - no click-ops
+#
+###############################################################################
+#
+# WHAT deploy.sh DOES
+# -------------------
+# deploy.sh is a *one-shot platform deployer*.
+#
+# It performs three jobs:
+#
+# 1) Build role-specific installer ISOs
+#    - Debian netinst
+#    - preseeded (no interactive install)
+#    - role-aware postinstall scripts
+#    - embedded "darksite" payload
+#
+# 2) Create VMs deterministically on Proxmox
+#    - UEFI (OVMF)
+#    - Secure Boot (pre-enrolled keys)
+#    - TPM 2.0
+#    - QEMU Guest Agent
+#    - clean destroy/recreate every time
+#
+# 3) Let the master orchestrate cluster bring-up
+#    - nodes auto-install
+#    - nodes auto-enroll
+#    - master converges the platform
+#
+###############################################################################
+#
+# TOPOLOGY: ONE SCRIPT, SIXTEEN NODES
+# ----------------------------------
+#
+# Platform services (4):
+#   - master        (hub / orchestrator)
+#   - prometheus
+#   - grafana
+#   - storage
+#
+# Kubernetes HA core (12):
+#   - etcd-1..3
+#   - cp-1..3        (control plane)
+#   - w-1..3         (workers)
+#   - lb-1..3        (API load balancers)
+#
+# Optional:
+#   - K8S_API_VIP for stable API access
+#
+###############################################################################
+#
+# DEPLOYMENT FLOW (PROXMOX → RUNNING PLATFORM)
+# --------------------------------------------
+#
+# 1) ISO MANUFACTURING
+#    - mk_iso() builds per-role installers
+#    - preseed + postinstall logic
+#    - baked-in payload under darksite/
+#    - optional offline APT snapshot
+#
+# 2) VM CREATION
+#    - qm destroy --purge (idempotent)
+#    - qm create with:
+#        * q35 machine
+#        * UEFI + Secure Boot
+#        * TPM 2.0
+#        * QEMU Guest Agent
+#    - ISO attached as CD-ROM
+#
+# 3) HANDS-OFF INSTALL
+#    - no console login
+#    - no interactive steps
+#    - node boots directly into its role
+#
+###############################################################################
+#
+# MASTER AS THE CONTROL POINT
+# ---------------------------
+# The deploy host only:
+#   - talks to Proxmox
+#   - optionally triggers master apply
+#
+# After that:
+#   - the master owns enrollment
+#   - the master owns convergence
+#
+# Two key mechanisms:
+#
+# - QEMU Guest Agent:
+#     * pre-network control channel
+#     * fetches files before SSH is ready
+#
+# - Enrollment window:
+#     * master opens ENROLL_ENABLED
+#     * nodes register WireGuard keys
+#     * no per-node manual setup
+#
+###############################################################################
+#
+# BACKPLANES: EXPLICIT FROM FIRST BOOT
+# -----------------------------------
+# Kernel-native WireGuard planes are established immediately:
+#
+#   wg1 → control / management
+#   wg2 → metrics / observability
+#   wg3 → Kubernetes backplane
+#
+# Each node gets deterministic /32s per plane.
+# Firewall rules trust planes explicitly.
+#
+# Result:
+#   - networking is deliberate
+#   - security boundaries are obvious
+#   - no hidden transport assumptions
+#
+###############################################################################
+#
+# KUBERNETES AS A CONVERGED OUTCOME
+# --------------------------------
+# Kubernetes is not installed by hand.
+#
+# The master applies the platform state:
+#   - Salt: early discovery / registration
+#   - Ansible:
+#       * etcd HA
+#       * containerd
+#       * kubeadm HA control plane
+#       * workers join
+#       * load balancers stabilize API
+#       * platform services converge
+#
+###############################################################################
+#
+# WHY THIS IS DIFFERENT
+# ---------------------
+#
+# 1) Rebuild > Repair
+#    - drift is eliminated by redeploying
+#
+# 2) No per-node babysitting
+#    - SSH is an escape hatch, not the control plane
+#
+# 3) No dependency on “userland first”
+#    - OS installs, configures, enrolls automatically
+#
+# 4) Networking is intentional
+#    - planes exist early and are role-defined
+#
+# 5) VM firmware is part of the spec
+#    - Secure Boot, TPM2, QGA are not optional
+#
+###############################################################################
+#
+# MENTAL MODEL
+# ------------
+#
+#   Build      → role ISOs
+#   Stamp      → deterministic Proxmox VMs
+#   Bootstrap  → nodes self-configure
+#   Enroll     → master-controlled membership
+#   Converge   → etcd → kubeadm HA → services
+#
+# Result:
+#   One script.
+#   One topology.
+#   One converged Kubernetes platform.
+#
+###############################################################################
+
 set -euo pipefail
 
 _script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
