@@ -196,4 +196,6 @@ Secure Boot, TPM2, and QGA are not “nice to have” — they are built into th
 5. **Converge**: master applies the platform state (etcd → kubeadm HA → services)
 
 The result is a Kubernetes platform that behaves like a single artifact:
-**one script, one topology, one converged outcome.**
+**one script, one topology, one converged outcome.** 
+
+## ie: kubernetes is to containers, as kubedos is to the OS.   < moo ! >
