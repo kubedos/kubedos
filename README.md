@@ -4,7 +4,7 @@
 **Audience:** Platform / SRE / Infra engineers (Linux, networking, storage, virtualization, Kubernetes fluent)
 **Tagline:** *Build the world. Every time.*
 
-**Keywords:** Proxmox VE, Ansible, Salt, WireGuard, Cilium, Hubble, eBPF, OpenZFS, Ceph, kubeadm HA, Prometheus, Grafana, Loki, TPM 2.0, UEFI Secure Boot, measured boot, attestation, sealed keys, SBOM, provenance, air-gapped, dark-site, time-capsule, Talos OS (reference)
+**Keywords:** Proxmox VE, Ansible, Salt, WireGuard, eBPF, OpenZFS, Ceph, kubeadm HA, Prometheus, Grafana, Loki, TPM 2.0, UEFI Secure Boot, measured boot, attestation, sealed keys, SBOM, provenance, air-gapped, dark-site, time-capsule, Talos OS (reference)
 
 ---
 
