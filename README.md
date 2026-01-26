@@ -198,6 +198,7 @@ Secure Boot, TPM2, and QGA are not “nice to have” — they are built into th
 The result is a Kubernetes platform that behaves like a single artifact:
 **one script, one topology, one converged outcome.** 
 
+```bash
      _______
    <  Moo!?  >
      -------
@@ -210,3 +211,4 @@ The result is a Kubernetes platform that behaves like a single artifact:
   Role      : Kubernetes platform cattle node
   Directive : "If it breaks, replace it."
   Status    : ready to be re-provisioned
+```
