@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==============================================================================
-# build-master-iso-hw.sh
-#   Debian 13 DVD -> Custom no-touch hardware ISO
-#   - NVMe-first disk selection (no /dev/sda hardcode)
-#   - Installer networking disabled (skips Wi-Fi entirely; no WPA prompts)
-#   - Robust GRUB injection (BIOS + UEFI + efi.img) with fixed menuentry id
-#   - Seeds /darksite and enables bootstrap.service
-# ==============================================================================
-
 LOG_FILE="${LOG_FILE:-/root/install.txt}"
 exec &> >(tee -a "$LOG_FILE")
 
