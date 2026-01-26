@@ -3,7 +3,7 @@
 ###############################################################################
 # What it is, how it works, and why it’s different?
 #
-# kubedOS treats an entire Kubernetes platform as a *single deployable object*:
+# deploy.sh treats an entire Kubernetes platform as an **example** *single deployable object*:
 #
 #   OS + payload + topology  →  one deterministic cluster artifact
 #
