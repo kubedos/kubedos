@@ -802,5 +802,3 @@ sudo systemctl enable --now kubelet
 echo "Paste and run kubeadm join from control-plane:"
 echo "  sudo kubeadm join <CONTROL_IP>:6443 --token ... --discovery-token-ca-cert-hash sha256:..."
 ```
-
-(eBPF) todd@sapphire:~$ 
