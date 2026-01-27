@@ -1,5 +1,4 @@
-(eBPF) todd@sapphire:~$ cat walkthrough.md 
-# Tigera / Calico Customer Success Technical Assessment  
+
 ## Demo runbook + commands + config locations (end‑to‑end)
 
 > This document is written so you can **demo every step live**: build cluster → install Calico → deploy Bookinfo → apply policy strategy → run tests (dev1 vs non‑dev1 vs outside cluster) → explain routing and what broke / how it was fixed.
