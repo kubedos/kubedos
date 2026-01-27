@@ -1,3 +1,5 @@
+https://kubedos.com/
+
 # kubedOS: what it is, how it works, and why it’s different
 
 kubedOS treats an entire Kubernetes platform as **one deployable object**: a sealed OS + payload + topology that can be stamped onto Proxmox and self-assemble on first boot.
