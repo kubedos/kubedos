@@ -1,7 +1,6 @@
-# Kubernetes + Calico (Tigera Operator) + Bookinfo — Unified Walkthrough (Dedupe’d)
-_Last consolidated: 2026-01-26 (America/Vancouver)_
+# Kubernetes Walkthrough
 
-This is a single, end-to-end runbook that merges all your notes into one coherent, copy/paste‑ready workflow:
+This is an end-to-end runbook that merges all your notes into one coherent, copy/paste‑ready workflow:
 - Proxmox‑hosted Debian JeOS nodes
 - kubeadm bootstrap (single control-plane)
 - Calico installed **via Tigera Operator** (authoritative)
