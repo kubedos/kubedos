@@ -5,9 +5,6 @@ umask 022
 
 # ============================================================
 # CLUSTER HEALTH / INSTALL SUPPORT BUNDLE
-# - Master is NOT a salt minion -> collected locally on master
-# - Minions collected via salt (run node collector + cp.push)
-# - Optionally ensure todd's SSH pubkey exists on minions (idempotent)
 # - Final bundle is scp'd as todd to 10.100.10.150:incoming/
 # ============================================================
 
