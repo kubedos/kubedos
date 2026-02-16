@@ -10,9 +10,9 @@
 ### VMs (3 nodes)
 | Role | Hostname | IP |
 |---|---|---|
-| control-plane | `etcd-1` | `192.168.122.60` |
-| worker | `worker-1` | `192.168.122.231` |
-| worker | `worker-2` | `192.168.122.13` |
+| control-plane | `etcd-1` | `10.100.10.30` |
+| worker | `worker-1` | `10.100.10.40` |
+| worker | `worker-2` | `10.100.10.41` |
 
 ### Hostname + `/etc/hosts` on every node
 **File:** `/etc/hosts`
